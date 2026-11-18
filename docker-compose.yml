@@ -15,3 +15,9 @@ services:
       - STORAGE_ROOT=/usr/src/app/uploads
     volumes:
       - /data/hc-scan/uploads:/usr/src/app/uploads
+    networks:
+      - coolify
+
+networks:
+  coolify:
+    external: true
