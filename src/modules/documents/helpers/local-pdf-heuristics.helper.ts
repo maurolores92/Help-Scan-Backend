@@ -471,14 +471,14 @@ export const extractUniversalHeuristicsFromText = (
       recipientTaxId = clientCuits[0].replace(/\s+/g, '');
       issuerTaxId = allCuits.map((c) => c.replace(/\s+/g, '')).find((c) => c !== recipientTaxId) || null;
       if (!issuerTaxId && issuerName && /HELP\s*COPIES/i.test(issuerName)) {
-        issuerTaxId = '30-71171817-2';
+        issuerTaxId = '';
       }
     }
   }
 
   if (!issuerTaxId) {
     if (issuerName && /HELP\s*COPIES/i.test(issuerName)) {
-      issuerTaxId = '30-71171817-2';
+      issuerTaxId = '';
     } else {
       issuerTaxId = allCuits.map((c) => c.replace(/\s+/g, '')).find((c) => c !== recipientTaxId) || primaryTaxId;
     }

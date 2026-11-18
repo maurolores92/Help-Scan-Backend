@@ -5,6 +5,9 @@ FROM node:24-alpine AS builder
 
 WORKDIR /usr/src/app
 
+# Instalar dependencias de sistema para módulos nativos (bcrypt, etc.)
+RUN apk add --no-cache python3 make g++
+
 # Instalar PNPM de forma global
 RUN npm install -g pnpm
 

@@ -1,133 +1,17 @@
 services:
-  # Base de Datos PostgreSQL para HC-SCAN
-  postgres:
-    image: postgres:16-alpine
-    container_name: hc_scan_postgres
-    restart: unless-stopped
-    ports:
-      - "${DB_PORT:-5432}:5432"
-    environment:
-      - POSTGRES_USER=${DATABASE_USER:-postgres}
-      - POSTGRES_PASSWORD=${DATABASE_PASSWORD:-helpcopies_pass}
-      - POSTGRES_DB=${DATABASE_NAME:-hc_scan}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-postgres} -d ${DATABASE_NAME:-hc_scan}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - hc_scan_network
-
-  # Backend NestJS (API + Visor + Ingesta 1 a 1 + Conexión con OCR)
-  api:
+  backend:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: hc_scan_api
     restart: unless-stopped
     ports:
-      - "${PORT:-5002}:5002"
-    env_file:
-      - .env
+      - "5002"
     environment:
       - NODE_ENV=production
-      - DATABASE_HOST=postgres
-      - DB_HOST=postgres
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - OCR_SERVICE_URL=http://ocr:8000
+      - PORT=5002
+      - HOST=0.0.0.0
       - STORAGE_ROOT_PATH=/usr/src/app/uploads
       - STORAGE_ROOT=/usr/src/app/uploads
-      - SFTPGO_ADMIN_URL=http://ftp:8080
-      - SFTPGO_STORAGE_ROOT=/srv/helpscan/uploads
     volumes:
-      # Volumen persistente para proteger todos los archivos y documentos de las empresas
-      - ./uploads:/usr/src/app/uploads
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_started
-      ocr:
-        condition: service_healthy
-    networks:
-      - hc_scan_network
-
-  # Microservicio OCR de Python (FastAPI + PyMuPDF + Tesseract en Español)
-  ocr:
-    build:
-      context: ../ocr-service
-      dockerfile: Dockerfile
-    container_name: hc_scan_ocr
-    restart: unless-stopped
-    ports:
-      - "${OCR_PORT:-8000}:8000"
-    environment:
-      - PORT=8000
-    volumes:
-      # Acceso de lectura al volumen de almacenamiento para extracción directa si se requiere
-      - ./uploads:/usr/src/app/uploads:ro
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-    networks:
-      - hc_scan_network
-
-  # Redis para colas y control de concurrencia secuencial
-  redis:
-    image: redis:7-alpine
-    container_name: hc_scan_redis
-    restart: unless-stopped
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    volumes:
-      - redis_data:/data
-    networks:
-      - hc_scan_network
-
-  # Servidor FTP para escaneo directo desde impresoras HP (LaserJet Managed E52645, etc.)
-  # La impresora HP solo necesita la IP del VPS, puerto 21, usuario y clave asignados en HC-Scan
-  ftp:
-    image: drakkan/sftpgo:v2.6-alpine
-    container_name: hc_scan_ftp
-    restart: unless-stopped
-    user: "1000:1000"
-    ports:
-      # Puerto 21 estándar de FTP plano para que la impresora HP escanee directo sin complejidad
-      - "${FTP_PORT:-21}:21"
-      # Rango pasivo acotado (solo 5 puertos)
-      - "21000-21005:21000-21005"
-    environment:
-      - SFTPGO_DATA_PROVIDER__CREATE_DEFAULT_ADMIN=true
-      - SFTPGO_DEFAULT_ADMIN_USERNAME=${SFTPGO_ADMIN_USER:-hc_sftp_admin}
-      - SFTPGO_DEFAULT_ADMIN_PASSWORD=${SFTPGO_ADMIN_PASSWORD:-sftp_admin_pass_123}
-      - SFTPGO_FTPD__BINDINGS__0__PORT=21
-      - SFTPGO_FTPD__BINDINGS__0__FORCE_PASSIVE_IP=${VPS_PUBLIC_IP:-}
-      - SFTPGO_FTPD__BINDINGS__0__TLS_MODE=0
-      - SFTPGO_FTPD__PASSIVE_PORT_RANGE__START=21000
-      - SFTPGO_FTPD__PASSIVE_PORT_RANGE__END=21005
-      # Webhook interno hacia NestJS cuando la impresora termina de subir el PDF
-      - SFTPGO_COMMON__ACTIONS__EXECUTE_ON=upload
-      - SFTPGO_COMMON__ACTIONS__HOOK=http://api:5002/api/ftp-devices/internal/sftpgo-webhook?secret=${SFTPGO_WEBHOOK_SECRET:-sftpgo_webhook_secret_123}
-    volumes:
-      - sftpgo_data:/var/lib/sftpgo
-      # Mismo volumen de almacenamiento montado en el backend
-      - ./uploads:/srv/helpscan/uploads
-    networks:
-      - hc_scan_network
-
-networks:
-  hc_scan_network:
-    driver: bridge
-
-volumes:
-  postgres_data:
-    driver: local
-  sftpgo_data:
-    driver: local
-  redis_data:
-    driver: local
+      - /data/hc-scan/uploads:/usr/src/app/uploads
