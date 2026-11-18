@@ -1,6 +1,20 @@
 import { BadRequestException } from '@nestjs/common';
-import { existsSync, mkdirSync, readdirSync, renameSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync } from 'fs';
 import { basename, isAbsolute, join, resolve, sep } from 'path';
+
+/**
+ * Asegura la existencia de un directorio con permisos 0777 para que múltiples
+ * contenedores (Backend como root/node, SFTPGo como sftpgo, OCR como python)
+ * puedan escribir y leer sin colisiones de "permission denied".
+ */
+export function safeEnsureDir(dirPath: string): void {
+  if (!existsSync(dirPath)) {
+    mkdirSync(dirPath, { recursive: true, mode: 0o777 });
+  }
+  try {
+    chmodSync(dirPath, 0o777);
+  } catch {}
+}
 
 export interface TenantStorageDirectories {
   baseDir: string;
@@ -38,9 +52,7 @@ export function getStorageRootPath(): string {
       : resolve(backendRoot, envPath)
     : resolve(backendRoot, 'uploads');
 
-  if (!existsSync(storagePath)) {
-    mkdirSync(storagePath, { recursive: true });
-  }
+  safeEnsureDir(storagePath);
 
   return storagePath;
 }
@@ -66,9 +78,7 @@ export function ensureTenantDirectories(
 ): TenantStorageDirectories {
   const safeId = sanitizeTenantId(companyId);
   const tenancyRoot = join(getStorageRootPath(), 'tenancy');
-  if (!existsSync(tenancyRoot)) {
-    mkdirSync(tenancyRoot, { recursive: true });
-  }
+  safeEnsureDir(tenancyRoot);
 
   let folderName = `company_${safeId}`;
   if (companySlugOrName && companySlugOrName.trim()) {
@@ -114,9 +124,7 @@ export function ensureTenantDirectories(
   const imagesDir = join(baseDir, 'images');
 
   for (const dir of [baseDir, inboxDir, vaultDir, quarantineDir, imagesDir]) {
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
+    safeEnsureDir(dir);
   }
 
   return { baseDir, inboxDir, vaultDir, quarantineDir, imagesDir };
@@ -132,9 +140,7 @@ export function getTenantImagesPath(companyId: number | string, subFolder?: stri
   }
   const cleanSub = subFolder.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
   const targetDir = join(imagesDir, cleanSub);
-  if (!existsSync(targetDir)) {
-    mkdirSync(targetDir, { recursive: true });
-  }
+  safeEnsureDir(targetDir);
   return targetDir;
 }
 
@@ -187,9 +193,7 @@ export function ensureTenantFtpInboxDir(
 
   const cleanSubFolder = sanitizeFtpSubFolder(subFolder);
   const absoluteDir = join(inboxDir, cleanSubFolder);
-  if (!existsSync(absoluteDir)) {
-    mkdirSync(absoluteDir, { recursive: true });
-  }
+  safeEnsureDir(absoluteDir);
 
   return {
     absoluteDir,
