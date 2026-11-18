@@ -56,9 +56,6 @@ RUN mkdir -p uploads storage && chown -R node:node /usr/src/app/uploads /usr/src
 # Declarar volumen persistente para imágenes y bóveda local
 VOLUME ["/usr/src/app/uploads", "/usr/src/app/storage"]
 
-# Ejecutar con usuario no-root por seguridad
-USER node
-
 # Exponer el puerto del backend (5002)
 EXPOSE 5002
 
