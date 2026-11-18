@@ -86,6 +86,9 @@ export class PlansController {
           documents: { current: 0, max: null, unlimited: true, percentage: 0 },
           storageMb: { current: 0, max: null, unlimited: true, percentage: 0, currentBytes: 0 },
           aiQueries: { current: 0, max: null, unlimited: true, percentage: 0, period: '', tokensUsed: 0, aiDocumentsProcessed: 0 },
+          totalPagesUploaded: 0,
+          activeDocumentsCount: 0,
+          activeFtpDevicesCount: 0,
         };
       }
       throw new BadRequestException('El usuario no posee una compañía asociada');

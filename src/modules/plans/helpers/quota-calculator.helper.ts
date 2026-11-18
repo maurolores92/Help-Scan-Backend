@@ -39,6 +39,7 @@ export interface CompanyQuotaSummary {
   aiQueries: AiQuotaMetricItem;
   totalPagesUploaded?: number;
   activeDocumentsCount?: number;
+  activeFtpDevicesCount?: number;
 }
 
 const BYTES_PER_MB = 1024 * 1024;

@@ -6,6 +6,7 @@ import { PlanExchangeConfig } from './models/plan-exchange-config.model';
 import { Company } from '../companies/company.model';
 import { Users } from '../users/users.model';
 import { Document } from '../documents/document.model';
+import { FtpDevice } from '../ftp-devices/ftp-device.model';
 import { AuditModule } from '../audit/audit.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PlansService } from './plans.service';
@@ -24,6 +25,7 @@ import { PlansController } from './plans.controller';
       Company,
       Users,
       Document,
+      FtpDevice,
     ]),
     AuditModule,
     NotificationsModule,

@@ -6,6 +6,7 @@ import { CompanyMonthlyUsage } from '../models/company-monthly-usage.model';
 import { Company } from '../../companies/company.model';
 import { Users, UserStatus } from '../../users/users.model';
 import { Document } from '../../documents/document.model';
+import { FtpDevice, FtpDeviceStatus } from '../../ftp-devices/ftp-device.model';
 import {
   buildQuotaMetric,
   bytesToMegabytes,
@@ -24,6 +25,7 @@ export class CompanyQuotaSummaryService {
     @InjectModel(Company) private readonly companyModel: typeof Company,
     @InjectModel(Users) private readonly userModel: typeof Users,
     @InjectModel(Document) private readonly documentModel: typeof Document,
+    @InjectModel(FtpDevice) private readonly ftpDeviceModel: typeof FtpDevice,
     @InjectModel(CompanyMonthlyUsage)
     private readonly monthlyUsageModel: typeof CompanyMonthlyUsage,
   ) {}
@@ -56,7 +58,7 @@ export class CompanyQuotaSummaryService {
     const companyIds = companies.map((c) => c.id);
     const period = getCurrentBillingPeriod();
 
-    const [userCountsRaw, docAggregatesRaw, aiUsagesRaw] = await Promise.all([
+    const [userCountsRaw, docAggregatesRaw, aiUsagesRaw, ftpDeviceCountsRaw] = await Promise.all([
       this.userModel.findAll({
         attributes: ['companyId', [fn('COUNT', col('id')), 'activeCount']],
         where: {
@@ -82,10 +84,22 @@ export class CompanyQuotaSummaryService {
         where: { companyId: { [Op.in]: companyIds }, period },
         raw: true,
       }),
+      this.ftpDeviceModel.findAll({
+        attributes: ['companyId', [fn('COUNT', col('id')), 'activeCount']],
+        where: {
+          companyId: { [Op.in]: companyIds },
+          status: FtpDeviceStatus.ACTIVE,
+        },
+        group: ['companyId'],
+        raw: true,
+      }) as unknown as Promise<Array<{ companyId: number; activeCount: string | number }>>,
     ]);
 
     const userCountMap = new Map<number, number>(
       userCountsRaw.map((r) => [Number(r.companyId), Number(r.activeCount || 0)]),
+    );
+    const ftpDeviceCountMap = new Map<number, number>(
+      ftpDeviceCountsRaw.map((r) => [Number(r.companyId), Number(r.activeCount || 0)]),
     );
     const docStatsMap = new Map<number, { count: number; bytes: number }>(
       docAggregatesRaw.map((r) => [
@@ -142,6 +156,7 @@ export class CompanyQuotaSummaryService {
         },
         totalPagesUploaded: company.totalPagesUploaded ?? 0,
         activeDocumentsCount: docStats.count,
+        activeFtpDevicesCount: ftpDeviceCountMap.get(company.id) ?? 0,
       });
     }
 

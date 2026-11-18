@@ -7,6 +7,7 @@ import { CompanyQuotaSummaryService } from './company-quota-summary.service';
 import { Company, CompanyStatus } from '../../companies/company.model';
 import { Users } from '../../users/users.model';
 import { Document } from '../../documents/document.model';
+import { FtpDevice } from '../../ftp-devices/ftp-device.model';
 import { CompanyMonthlyUsage } from '../models/company-monthly-usage.model';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { AuditService } from '../../audit/audit.service';
@@ -17,6 +18,7 @@ describe('TenantQuotasService', () => {
   let userModelMock: any;
   let documentModelMock: any;
   let monthlyUsageModelMock: any;
+  let ftpDeviceModelMock: any;
   let notificationsServiceMock: any;
   let auditServiceMock: any;
   let sequelizeMock: any;
@@ -38,6 +40,10 @@ describe('TenantQuotasService', () => {
       findAll: jest.fn(),
       findOrCreate: jest.fn(),
     };
+    ftpDeviceModelMock = {
+      count: jest.fn().mockResolvedValue(0),
+      findAll: jest.fn().mockResolvedValue([]),
+    };
     notificationsServiceMock = {
       dispatch: jest.fn().mockResolvedValue(undefined),
     };
@@ -58,6 +64,7 @@ describe('TenantQuotasService', () => {
         { provide: getModelToken(Company), useValue: companyModelMock },
         { provide: getModelToken(Users), useValue: userModelMock },
         { provide: getModelToken(Document), useValue: documentModelMock },
+        { provide: getModelToken(FtpDevice), useValue: ftpDeviceModelMock },
         { provide: getModelToken(CompanyMonthlyUsage), useValue: monthlyUsageModelMock },
         { provide: Sequelize, useValue: sequelizeMock },
         { provide: NotificationsService, useValue: notificationsServiceMock },
