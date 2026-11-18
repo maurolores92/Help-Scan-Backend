@@ -13,7 +13,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml* ./
 COPY scripts/ ./scripts/
 
 # Instalar todas las dependencias con PNPM para compilar TypeScript y binarios nativos
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --no-frozen-lockfile
 
 # Copiar el código fuente completo
 COPY . .
@@ -38,7 +38,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml* ./
 COPY scripts/ ./scripts/
 
 # Instalar exclusivamente dependencias de producción con PNPM
-RUN pnpm install --prod --frozen-lockfile && pnpm store prune
+RUN pnpm install --prod --no-frozen-lockfile && pnpm store prune
 
 # Copiar la aplicación compilada desde la etapa de compilación
 COPY --from=builder /usr/src/app/dist ./dist
