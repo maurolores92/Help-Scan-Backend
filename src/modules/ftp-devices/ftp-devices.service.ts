@@ -163,6 +163,12 @@ export class FtpDevicesService {
   }
 
   async create(dto: CreateFtpDeviceDto, user: any) {
+    if (!isPlatformSuperAdmin(user)) {
+      throw new ForbiddenException(
+        'Solo el Super Administrador de HelpCopies puede registrar nuevos accesos de impresoras HP.',
+      );
+    }
+
     const companyId = await this.resolveScopedTargetCompany(
       user,
       dto.companyId,
@@ -260,6 +266,12 @@ export class FtpDevicesService {
   }
 
   async update(id: number, dto: UpdateFtpDeviceDto, user: any) {
+    if (!isPlatformSuperAdmin(user)) {
+      throw new ForbiddenException(
+        'Solo el Super Administrador de HelpCopies puede modificar la configuración de equipos HP.',
+      );
+    }
+
     const device = await this.findScopedDevice(id, user);
     const prevStatus = device.status;
     const prevSnapshot = toSafeFtpDeviceDto(device);
@@ -353,6 +365,12 @@ export class FtpDevicesService {
   }
 
   async getCredentials(id: number, user: any) {
+    if (!isPlatformSuperAdmin(user)) {
+      throw new ForbiddenException(
+        'Solo el Super Administrador de HelpCopies puede consultar credenciales de equipos HP.',
+      );
+    }
+
     const device = await this.findScopedDevice(id, user);
     const password = decryptFtpSecret(device.passwordEncrypted);
     const serverMeta = this.sftpGoClient.getPublicServerMetadata();
@@ -381,6 +399,12 @@ export class FtpDevicesService {
   }
 
   async retrySync(id: number, user: any) {
+    if (!isPlatformSuperAdmin(user)) {
+      throw new ForbiddenException(
+        'Solo el Super Administrador de HelpCopies puede sincronizar usuarios con SFTPGo.',
+      );
+    }
+
     const device = await this.findScopedDevice(id, user);
     ensureTenantFtpInboxDir(device.companyId, device.subFolder);
     const plainPassword = decryptFtpSecret(device.passwordEncrypted);
@@ -407,6 +431,12 @@ export class FtpDevicesService {
   }
 
   async remove(id: number, user: any) {
+    if (!isPlatformSuperAdmin(user)) {
+      throw new ForbiddenException(
+        'Solo el Super Administrador de HelpCopies puede eliminar equipos HP.',
+      );
+    }
+
     const device = await this.findScopedDevice(id, user);
     const snapshot = toSafeFtpDeviceDto(device);
 
