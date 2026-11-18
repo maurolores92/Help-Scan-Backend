@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { readEnv } from '../../../config/env-resolver';
 import { FtpDevice, FtpDeviceStatus, FtpProtocol } from '../ftp-device.model';
 
@@ -15,6 +15,7 @@ export interface FtpServerPublicInfo {
   passivePorts: string;
   sftpgoConfigured: boolean;
   sftpgoReachable: boolean;
+  error?: string | null;
 }
 
 /**
@@ -23,10 +24,36 @@ export interface FtpServerPublicInfo {
  * sin crear usuarios reales en el sistema operativo Linux.
  */
 @Injectable()
-export class SftpGoClientService {
+export class SftpGoClientService implements OnModuleInit {
   private readonly logger = new Logger(SftpGoClientService.name);
   private cachedToken: string | null = null;
   private tokenExpiresAt = 0;
+
+  async onModuleInit() {
+    const cfg = this.getConfig();
+    if (cfg.adminUrl) {
+      try {
+        const info = await this.getServerInfoWithHealth();
+        if (info.sftpgoReachable) {
+          this.logger.log(
+            `🚀 [SFTPGo Client] Conexión exitosa con la API de SFTPGo en ${cfg.adminUrl} (Servidor FTP: ONLINE)`,
+          );
+        } else {
+          this.logger.error(
+            `❌ [SFTPGo Client] Falló la verificación de SFTPGo en ${cfg.adminUrl}: ${info.error || 'Credenciales o conexión inválida'}`,
+          );
+        }
+      } catch (err: any) {
+        this.logger.error(
+          `❌ [SFTPGo Client] Error crítico de conexión contra SFTPGo en ${cfg.adminUrl}: ${err?.message}`,
+        );
+      }
+    } else {
+      this.logger.log(
+        '[SFTPGo Client] SFTPGO_ADMIN_URL no configurada. Operando en modo carpeta local.',
+      );
+    }
+  }
 
   private getConfig() {
     return {
@@ -62,14 +89,21 @@ export class SftpGoClientService {
   async getServerInfoWithHealth(): Promise<FtpServerPublicInfo> {
     const baseMeta = this.getPublicServerMetadata();
     if (!baseMeta.sftpgoConfigured) {
-      return { ...baseMeta, sftpgoReachable: false };
+      return {
+        ...baseMeta,
+        sftpgoReachable: false,
+        error:
+          'SFTPGO_ADMIN_URL o SFTPGO_ADMIN_PASSWORD no configurados en las variables de entorno.',
+      };
     }
 
     try {
       await this.getAccessToken();
-      return { ...baseMeta, sftpgoReachable: true };
-    } catch {
-      return { ...baseMeta, sftpgoReachable: false };
+      return { ...baseMeta, sftpgoReachable: true, error: null };
+    } catch (err: any) {
+      const errMsg = err?.message || String(err);
+      this.logger.warn(`[SFTPGo Client] Error de verificación de salud: ${errMsg}`);
+      return { ...baseMeta, sftpgoReachable: false, error: errMsg };
     }
   }
 
