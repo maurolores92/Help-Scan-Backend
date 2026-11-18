@@ -62,5 +62,5 @@ USER node
 # Exponer el puerto del backend (5002)
 EXPOSE 5002
 
-# Comando de inicio
-CMD ["node", "dist/main"]
+# Comando de inicio (ejecuta dist/src/main.js generado por TypeScript)
+CMD ["sh", "-c", "if [ -f dist/src/main.js ]; then node dist/src/main.js; else node dist/main.js; fi"]
