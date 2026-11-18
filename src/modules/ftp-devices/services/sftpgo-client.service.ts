@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { readEnv } from '../../../config/env-resolver';
+import { ensureTenantFtpInboxDir } from '../../../common/utils/storage-path.util';
 import { FtpDevice, FtpDeviceStatus, FtpProtocol } from '../ftp-device.model';
 
 export interface SftpGoSyncResult {
@@ -109,7 +110,12 @@ export class SftpGoClientService implements OnModuleInit {
 
   buildContainerHomeDir(companyId: number, subFolder: string): string {
     const { storageRootInContainer } = this.getConfig();
-    return `${storageRootInContainer}/tenancy/company_${companyId}/inbox/${subFolder}`;
+    try {
+      const { relativeToStorage } = ensureTenantFtpInboxDir(companyId, subFolder);
+      return `${storageRootInContainer}/${relativeToStorage}`;
+    } catch {
+      return `${storageRootInContainer}/tenancy/company_${companyId}/inbox/${subFolder}`;
+    }
   }
 
   normalizeAllowedIps(ips?: string | string[] | null): string[] {
