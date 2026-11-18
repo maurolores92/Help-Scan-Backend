@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { readFileSync } from 'fs';
 import { readDecryptedVaultFile } from '../../../common/utils/vault-crypto.util';
 import pdfParse = require('pdf-parse');
@@ -55,8 +55,36 @@ Analiza el documento y devuelve ESTRICTAMENTE un objeto JSON válido (sin bloque
  *    sin re-transcribir todo el texto nativo (reduce el tiempo de 45s a ~1.5s).
  */
 @Injectable()
-export class DocumentAiExtractorService {
+export class DocumentAiExtractorService implements OnModuleInit {
   private readonly logger = new Logger(DocumentAiExtractorService.name);
+
+  async onModuleInit() {
+    const ocrUrl = process.env.OCR_SERVICE_URL?.trim();
+    if (ocrUrl) {
+      try {
+        const target = `${ocrUrl.replace(/\/+$/, '')}/health`;
+        const res = await fetch(target, { signal: AbortSignal.timeout(5000) });
+        if (res.ok) {
+          const body = await res.json().catch(() => ({}));
+          this.logger.log(
+            `🚀 [OCR Microservice] Conexión exitosa con Python en ${ocrUrl} (Status: ${body.status || 'OK'}, Motor: ${body.service || 'HC-Scan OCR'})`,
+          );
+        } else {
+          this.logger.warn(
+            `⚠️ [OCR Microservice] Respondió con código HTTP ${res.status} al verificar salud en ${target}`,
+          );
+        }
+      } catch (err: any) {
+        this.logger.warn(
+          `⚠️ [OCR Microservice] No se pudo verificar conexión al iniciar en ${ocrUrl} (${err?.message}). Verifique que el servicio OCR esté en ejecución en la misma red de Coolify.`,
+        );
+      }
+    } else {
+      this.logger.log(
+        '[OCR Microservice] No se configuró OCR_SERVICE_URL. Operando en modo local nativo (pdf-parse).',
+      );
+    }
+  }
 
   async extractFromFile(
     fullFilePath: string,

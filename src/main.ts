@@ -35,8 +35,12 @@ async function bootstrap() {
     prefix: '/api/images/',
   });
 
-  // Habilitar cabeceras de seguridad
-  app.use(helmet());
+  // Habilitar cabeceras de seguridad permitiendo recursos cross-origin
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: false,
+    }),
+  );
 
   app.useGlobalPipes(
     new ValidationPipe({
@@ -48,42 +52,19 @@ async function bootstrap() {
 
   app.useGlobalFilters(new AllExceptionsFilter());
 
-  const envFrontendUrls = process.env.FRONTEND_URL
-    ? process.env.FRONTEND_URL.split(',').map((url) => url.trim())
-    : [];
-
-  const defaultAllowedOrigins = [
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'http://127.0.0.1:3000',
-    'http://127.0.0.1:3001',
-  ];
-
-  const allowedOrigins = Array.from(
-    new Set([...envFrontendUrls, ...defaultAllowedOrigins]),
-  );
-
   app.enableCors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      if (
-        /^https?:\/\/(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(
-          origin,
-        )
-      ) {
-        return callback(null, true);
-      }
-      return callback(null, true);
-    },
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    origin: true,
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
     allowedHeaders: [
       'Content-Type',
       'Authorization',
       'Accept',
       'Origin',
       'x-api-key',
+      'x-company-id',
+      'x-tenant-id',
+      'x-requested-with',
+      'cache-control',
     ],
     credentials: true,
   });
