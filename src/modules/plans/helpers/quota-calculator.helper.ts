@@ -17,6 +17,7 @@ export interface AiQuotaMetricItem extends QuotaMetricItem {
 
 export interface EffectiveCompanyLimits {
   maxUsers: number | null;
+  maxPages: number | null;
   maxDocuments: number | null;
   maxStorageMb: number | null;
   maxAiQueriesMonthly: number | null;
@@ -32,9 +33,12 @@ export interface CompanyQuotaSummary {
   } | null;
   useCustomLimits: boolean;
   users: QuotaMetricItem;
+  pages: QuotaMetricItem;
   documents: QuotaMetricItem;
   storageMb: StorageQuotaMetricItem;
   aiQueries: AiQuotaMetricItem;
+  totalPagesUploaded?: number;
+  activeDocumentsCount?: number;
 }
 
 const BYTES_PER_MB = 1024 * 1024;
@@ -110,11 +114,13 @@ export const buildQuotaMetric = (
 export const resolveCompanyEffectiveLimits = (company: {
   useCustomLimits?: boolean;
   maxUsers?: number | null;
+  maxPages?: number | null;
   maxDocuments?: number | null;
   maxStorageMb?: number | null;
   maxAiQueriesMonthly?: number | null;
   plan?: {
     maxUsers: number | null;
+    maxPages?: number | null;
     maxDocuments: number | null;
     maxStorageMb: number | null;
     maxAiQueriesMonthly: number | null;
@@ -124,9 +130,15 @@ export const resolveCompanyEffectiveLimits = (company: {
   const useCustom = Boolean(company.useCustomLimits) || !hasPlan;
 
   if (!useCustom && company.plan) {
+    const planPages = normalizeNullableLimit(
+      company.plan.maxPages ?? company.plan.maxDocuments,
+      true,
+    );
+
     return {
       maxUsers: normalizeNullableLimit(company.plan.maxUsers, true),
-      maxDocuments: normalizeNullableLimit(company.plan.maxDocuments, true),
+      maxPages: planPages,
+      maxDocuments: planPages,
       maxStorageMb: normalizeNullableLimit(company.plan.maxStorageMb, true),
       maxAiQueriesMonthly: normalizeNullableLimit(
         company.plan.maxAiQueriesMonthly,
@@ -136,15 +148,23 @@ export const resolveCompanyEffectiveLimits = (company: {
   }
 
   const fallbackPlan = company.plan;
+  const customPages =
+    company.maxPages !== undefined
+      ? normalizeNullableLimit(company.maxPages, true)
+      : company.maxDocuments !== undefined
+        ? normalizeNullableLimit(company.maxDocuments, true)
+        : normalizeNullableLimit(
+            fallbackPlan?.maxPages ?? fallbackPlan?.maxDocuments,
+            true,
+          );
+
   return {
     maxUsers:
       company.maxUsers !== undefined
         ? normalizeNullableLimit(company.maxUsers, true)
         : normalizeNullableLimit(fallbackPlan?.maxUsers, true),
-    maxDocuments:
-      company.maxDocuments !== undefined
-        ? normalizeNullableLimit(company.maxDocuments, true)
-        : normalizeNullableLimit(fallbackPlan?.maxDocuments, true),
+    maxPages: customPages,
+    maxDocuments: customPages,
     maxStorageMb:
       company.maxStorageMb !== undefined
         ? normalizeNullableLimit(company.maxStorageMb, true)

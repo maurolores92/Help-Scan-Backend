@@ -108,6 +108,7 @@ export class PlansService {
           slug,
           description: dto.description ?? null,
           priceMonthly: dto.priceMonthly ?? 0,
+          currency: dto.currency || 'USD',
           maxUsers: dto.maxUsers !== undefined ? dto.maxUsers : 10,
           maxDocuments: dto.maxDocuments !== undefined ? dto.maxDocuments : 1000,
           maxStorageMb: dto.maxStorageMb !== undefined ? dto.maxStorageMb : 5120,
@@ -181,14 +182,37 @@ export class PlansService {
       countsRaw.map((c) => [Number(c.planId), Number(c.companiesCount || 0)]),
     );
 
-    const data = plans.map((plan) => ({
-      ...plan.toJSON(),
-      companiesCount: countMap.get(plan.id) ?? 0,
-    }));
+    const exchangeConfig = await this.exchangeRateService.getConfig();
+    const usdRate = Number(exchangeConfig.usdRate || 1250);
+    const roundPrices = Boolean(exchangeConfig.roundPrices);
+
+    const data = plans.map((plan) => {
+      const rawPrice = Number(plan.priceMonthly || 0);
+      const isUsd = (plan.currency || 'USD') === 'USD';
+      let priceInPesos: number;
+      if (isUsd) {
+        const converted = rawPrice * usdRate;
+        priceInPesos = roundPrices ? Math.ceil(converted) : Number(converted.toFixed(2));
+      } else {
+        priceInPesos = roundPrices ? Math.ceil(rawPrice) : Number(rawPrice.toFixed(2));
+      }
+
+      return {
+        ...plan.toJSON(),
+        companiesCount: countMap.get(plan.id) ?? 0,
+        priceInPesos,
+        exchangeRateApplied: usdRate,
+        roundPricesApplied: roundPrices,
+      };
+    });
 
     return {
       data,
       total: data.length,
+      exchangeConfig: {
+        usdRate,
+        roundPrices,
+      },
     };
   }
 

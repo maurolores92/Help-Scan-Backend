@@ -24,6 +24,7 @@ describe('TenantQuotasService', () => {
   beforeEach(async () => {
     companyModelMock = {
       findByPk: jest.fn(),
+      increment: jest.fn().mockResolvedValue(undefined),
     };
     userModelMock = {
       count: jest.fn(),
@@ -215,5 +216,53 @@ describe('TenantQuotasService', () => {
       expect.any(Object),
     );
     expect(result).toBe(usageRecordMock);
+  });
+
+  it('debe bloquear la subida si se supera el cupo de hojas/páginas acumuladas del período', async () => {
+    // Arrange
+    companyModelMock.findByPk.mockResolvedValueOnce({
+      id: 30,
+      name: 'Imprenta Express',
+      status: CompanyStatus.ACTIVE,
+      useCustomLimits: false,
+      plan: {
+        maxUsers: 5,
+        maxPages: 100,
+        maxDocuments: 100,
+        maxStorageMb: 2048,
+        maxAiQueriesMonthly: 100,
+      },
+    });
+    monthlyUsageModelMock.findOne.mockResolvedValueOnce({ pagesCount: 98 });
+
+    // Act & Assert (intentar subir un documento de 5 páginas cuando quedan solo 2)
+    await expect(
+      service.assertCanStoreDocument(30, 1024, 5),
+    ).rejects.toThrow(BadRequestException);
+    expect(notificationsServiceMock.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'company.quota_exceeded', companyId: 30 }),
+    );
+  });
+
+  it('debe acumular páginas en usage.pagesCount y company.totalPagesUploaded de forma estrictamente creciente', async () => {
+    // Arrange
+    const usageMock = {
+      pagesCount: 10,
+      increment: jest.fn().mockResolvedValue(undefined),
+    };
+    monthlyUsageModelMock.findOrCreate.mockResolvedValueOnce([usageMock, false]);
+
+    // Act
+    await service.recordPagesUploaded(45, 12);
+
+    // Assert
+    expect(usageMock.increment).toHaveBeenCalledWith(
+      { pagesCount: 12 },
+      expect.any(Object),
+    );
+    expect(companyModelMock.increment).toHaveBeenCalledWith(
+      { totalPagesUploaded: 12 },
+      expect.objectContaining({ where: { id: 45 } }),
+    );
   });
 });

@@ -73,36 +73,45 @@ export class TenantQuotasService {
   }
 
   /**
-   * Evalúa si es posible almacenar un nuevo archivo PDF según cantidad máxima y espacio en MB.
+   * Evalúa si es posible almacenar un nuevo archivo PDF según cantidad máxima de hojas/páginas y espacio en MB.
+   * El contador de hojas es estrictamente acumulativo y nunca disminuye al borrar archivos.
    */
   async checkDocumentQuota(
     companyId: number,
     incomingFileSizeBytes: number,
+    incomingPages: number = 1,
     transaction?: Transaction,
   ): Promise<{ allowed: boolean; reason?: string }> {
     const company = await this.loadActiveCompanyWithPlan(companyId, transaction);
     const limits = resolveCompanyEffectiveLimits(company);
 
+    // Verificación de cuota de hojas / páginas acumuladas en el período mensual
+    const period = getCurrentBillingPeriod();
+    const usage = await this.monthlyUsageModel.findOne({
+      where: { companyId, period },
+      transaction,
+    });
+    const currentPages = Number(usage?.pagesCount || 0);
+    const maxPages = limits.maxPages ?? limits.maxDocuments;
+
+    if (maxPages !== null && currentPages + incomingPages > maxPages) {
+      return {
+        allowed: false,
+        reason: `Se alcanzó el límite mensual de hojas/páginas permitidas en su plan (${currentPages} de ${maxPages} hojas contabilizadas en ${period}). Eliminar archivos no repone el contador de hojas ya escaneadas.`,
+      };
+    }
+
+    // Verificación de almacenamiento físico en disco (MB)
     const [aggregate] = (await this.documentModel.findAll({
       attributes: [
-        [fn('COUNT', col('id')), 'docsCount'],
         [fn('COALESCE', fn('SUM', col('file_size')), 0), 'totalBytes'],
       ],
       where: { companyId },
       raw: true,
       transaction,
-    })) as unknown as Array<{ docsCount: string | number; totalBytes: string | number }>;
+    })) as unknown as Array<{ totalBytes: string | number }>;
 
-    const currentDocs = Number(aggregate?.docsCount || 0);
     const currentBytes = Number(aggregate?.totalBytes || 0);
-
-    if (limits.maxDocuments !== null && currentDocs >= limits.maxDocuments) {
-      return {
-        allowed: false,
-        reason: `Se alcanzó el límite máximo de documentos permitidos en su plan (${limits.maxDocuments} archivos PDF).`,
-      };
-    }
-
     const projectedMb = bytesToMegabytes(currentBytes + incomingFileSizeBytes);
     if (limits.maxStorageMb !== null && projectedMb > limits.maxStorageMb) {
       return {
@@ -111,8 +120,13 @@ export class TenantQuotasService {
       };
     }
 
-    if (limits.maxDocuments !== null) {
-      await this.emitWarningIfNearThreshold(companyId, 'documentos PDF', currentDocs + 1, limits.maxDocuments);
+    if (maxPages !== null) {
+      await this.emitWarningIfNearThreshold(
+        companyId,
+        'hojas / páginas',
+        currentPages + incomingPages,
+        maxPages,
+      );
     }
     if (limits.maxStorageMb !== null) {
       await this.emitWarningIfNearThreshold(companyId, 'almacenamiento (MB)', projectedMb, limits.maxStorageMb);
@@ -124,12 +138,53 @@ export class TenantQuotasService {
   async assertCanStoreDocument(
     companyId: number,
     incomingFileSizeBytes: number,
+    incomingPages: number = 1,
     transaction?: Transaction,
   ): Promise<void> {
-    const check = await this.checkDocumentQuota(companyId, incomingFileSizeBytes, transaction);
+    const check = await this.checkDocumentQuota(companyId, incomingFileSizeBytes, incomingPages, transaction);
     if (!check.allowed) {
       await this.notifyQuotaExceeded(companyId, check.reason!);
       throw new BadRequestException(check.reason);
+    }
+  }
+
+  /**
+   * Incrementa atómicamente el contador acumulativo de páginas/hojas subidas.
+   * Este contador NUNCA disminuye, incluso si se eliminan archivos de la plataforma.
+   */
+  async recordPagesUploaded(
+    companyId: number,
+    pageCount: number,
+  ): Promise<void> {
+    if (!pageCount || pageCount <= 0) return;
+    const period = getCurrentBillingPeriod();
+    const transaction = await this.sequelize.transaction();
+
+    try {
+      const [usage] = await this.monthlyUsageModel.findOrCreate({
+        where: { companyId, period },
+        defaults: {
+          companyId,
+          period,
+          aiQueriesCount: 0,
+          aiDocumentsProcessed: 0,
+          tokensUsed: 0,
+          pagesCount: 0,
+        },
+        transaction,
+      });
+
+      await usage.increment({ pagesCount: pageCount }, { transaction });
+
+      // También incrementamos el odómetro histórico total de la empresa
+      await this.companyModel.increment(
+        { totalPagesUploaded: pageCount },
+        { where: { id: companyId }, transaction },
+      );
+
+      await transaction.commit();
+    } catch {
+      await transaction.rollback();
     }
   }
 

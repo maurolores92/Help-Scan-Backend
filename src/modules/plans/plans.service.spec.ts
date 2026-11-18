@@ -6,6 +6,7 @@ import { PlansService } from './plans.service';
 import { Plan } from './plan.model';
 import { Company } from '../companies/company.model';
 import { AuditService } from '../audit/audit.service';
+import { ExchangeRateService } from './services/exchange-rate.service';
 
 describe('PlansService', () => {
   let service: PlansService;
@@ -13,6 +14,7 @@ describe('PlansService', () => {
   let companyModelMock: any;
   let auditServiceMock: any;
   let sequelizeMock: any;
+  let exchangeRateServiceMock: any;
 
   beforeEach(async () => {
     planModelMock = {
@@ -39,6 +41,17 @@ describe('PlansService', () => {
       }),
     };
 
+    exchangeRateServiceMock = {
+      getUsdRate: jest.fn().mockResolvedValue(1250),
+      getConfig: jest.fn().mockResolvedValue({ id: 1, usdRate: 1250, roundPrices: true }),
+      formatPlanForPublicWeb: jest.fn().mockImplementation((plan: any) => ({
+        id: plan.id,
+        name: plan.name,
+        priceMonthly: Number(plan.priceMonthly || 0),
+        currency: 'ARS',
+      })),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PlansService,
@@ -46,6 +59,7 @@ describe('PlansService', () => {
         { provide: getModelToken(Company), useValue: companyModelMock },
         { provide: Sequelize, useValue: sequelizeMock },
         { provide: AuditService, useValue: auditServiceMock },
+        { provide: ExchangeRateService, useValue: exchangeRateServiceMock },
       ],
     }).compile();
 
@@ -122,4 +136,3 @@ describe('PlansService', () => {
     await expect(service.findById(999)).rejects.toThrow(NotFoundException);
   });
 });
-

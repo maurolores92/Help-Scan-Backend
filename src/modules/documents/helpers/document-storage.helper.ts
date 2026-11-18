@@ -12,6 +12,7 @@ import {
   getTenantQuarantinePath,
   getTenantVaultMonthlyPath,
 } from '../../../common/utils/storage-path.util';
+import { writeEncryptedVaultFile } from '../../../common/utils/vault-crypto.util';
 
 export interface PreparedDocumentStorageTarget {
   physicalFileName: string;
@@ -93,7 +94,8 @@ const safeMoveFile = (sourcePath: string, destinationPath: string): void => {
 };
 
 /**
- * Mueve un archivo detectado en `inbox/` hacia la bóveda definitiva `vault/YYYY/MM/`.
+ * Mueve un archivo detectado en `inbox/` hacia la bóveda definitiva `vault/YYYY/MM/`
+ * cifrándolo en reposo con AES-256-GCM y limpiando el archivo plano del buzón.
  */
 export const moveInboxFileToVault = (
   companyId: number,
@@ -109,7 +111,10 @@ export const moveInboxFileToVault = (
   const relativePath = `${relativeDir}/${physicalFileName}`;
   const fileHash = computeBufferSha256(buffer);
 
-  safeMoveFile(sourcePath, fullPhysicalPath);
+  writeEncryptedVaultFile(fullPhysicalPath, buffer, companyId);
+  if (existsSync(sourcePath)) {
+    unlinkSync(sourcePath);
+  }
 
   return {
     physicalFileName,

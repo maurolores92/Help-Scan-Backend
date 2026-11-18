@@ -3,6 +3,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { Op } from 'sequelize';
@@ -12,12 +13,14 @@ import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { QueryCompanyDto } from './dto/query-company.dto';
 import { Users, UserStatus } from '../users/users.model';
+import { Role } from '../role/role.model';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/audit.model';
 import { NotificationsService } from '../notifications/notifications.service';
 import { Plan } from '../plans/plan.model';
 import { PlansService } from '../plans/plans.service';
 import { TenantQuotasService } from '../plans/services/tenant-quotas.service';
+import { FtpDevicesService } from '../ftp-devices/ftp-devices.service';
 import { ensureTenantDirectories } from '../../common/utils/storage-path.util';
 import {
   buildCompanyCreationAttributes,
@@ -37,6 +40,7 @@ export class CompaniesService {
     private readonly notificationsService: NotificationsService,
     private readonly plansService: PlansService,
     private readonly tenantQuotasService: TenantQuotasService,
+    @Optional() private readonly ftpDevicesService?: FtpDevicesService,
   ) {}
 
   async create(dto: CreateCompanyDto, actorUserId?: number): Promise<any> {
@@ -78,8 +82,8 @@ export class CompaniesService {
 
       await transaction.commit();
 
-      // Aprovisionar inmediatamente su estructura física aislada storage/tenancy/company_<id>/{inbox,vault,quarantine}
-      ensureTenantDirectories(company.id);
+      // Aprovisionar inmediatamente su estructura física aislada storage/tenancy/company_<id>_<slug>/{inbox,vault,quarantine}
+      ensureTenantDirectories(company.id, company.slug || company.name);
 
       await this.auditService.log({
         action: AuditAction.CREATE,
@@ -95,132 +99,174 @@ export class CompaniesService {
         description: `Se ha creado la compañía '${company.name}' (Plan: ${assignedPlan?.name || 'Personalizado'}) y su administrador '${adminUser.username}'`,
       });
 
-      if (actorUserId) {
-        await this.notificationsService.notifyUser({
-          userId: actorUserId,
-          type: 'system.company_created',
-          title: 'Nueva compañía y administrador creados',
-          body: `Se creó exitosamente la compañía ${company.name} con su administrador ${adminUser.email}`,
-          companyId: company.id,
-        });
-      }
-
       return {
         company,
-        initialAdmin: {
+        initialAdminUser: {
           id: adminUser.id,
-          name: adminUser.name,
-          lastName: adminUser.lastName,
-          email: adminUser.email,
           username: adminUser.username,
-          temporaryPassword: dto.adminPassword ? undefined : adminSetup.rawPassword,
-          role: adminSetup.companyAdminRole.slug,
+          email: adminUser.email,
+          temporaryPassword: adminSetup.rawPassword,
         },
       };
     } catch (error: any) {
       await transaction.rollback();
-      this.logger.error(`Error al crear la compañía: ${error.message}`, error.stack);
+      this.logger.error(`Error al registrar la compañía ${dto.name}: ${error.message}`);
       throw error;
     }
   }
 
-  async findAll(query: QueryCompanyDto) {
-    const { page = 1, limit = 10 } = query;
+  async findAll(query: QueryCompanyDto): Promise<{
+    data: any[];
+    meta: {
+      totalItems: number;
+      itemCount: number;
+      itemsPerPage: number;
+      totalPages: number;
+      currentPage: number;
+    };
+  }> {
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.max(1, Math.min(100, Number(query.limit) || 10));
     const offset = (page - 1) * limit;
+
     const where = buildCompanySearchWhere(query);
 
     const { rows, count } = await this.companyModel.findAndCountAll({
       where,
       limit,
       offset,
-      include: [{ model: Plan, as: 'plan' }],
       order: [['createdAt', 'DESC']],
+      include: [
+        {
+          model: Plan,
+          attributes: ['id', 'name', 'slug', 'priceMonthly', 'currency', 'isTrial', 'badgeColor'],
+        },
+      ],
     });
 
-    const quotaMap = await this.tenantQuotasService.getBatchQuotaSummaries(rows);
-    const companiesWithQuotas = rows.map((comp) => {
-      const compJson = comp.toJSON();
-      const quotaSummary = quotaMap.get(comp.id);
-      compJson.activeUsersCount = quotaSummary?.users.current ?? 0;
-      compJson.quotaSummary = quotaSummary ?? null;
-      return compJson;
+    const summariesMap = await this.tenantQuotasService.getBatchQuotaSummaries(rows);
+
+    const data = rows.map((comp) => {
+      const summary = summariesMap.get(comp.id);
+      return {
+        ...comp.toJSON(),
+        activeUsersCount: summary ? summary.users.current : 0,
+        quotaSummary: summary || null,
+      };
     });
 
     return {
-      data: companiesWithQuotas,
+      data,
       meta: {
         totalItems: count,
+        itemCount: rows.length,
+        itemsPerPage: limit,
         totalPages: Math.ceil(count / limit),
         currentPage: page,
-        itemsPerPage: limit,
       },
     };
-  }
-
-  async findById(id: number): Promise<any> {
-    const company = await this.companyModel.findByPk(id, {
-      include: [{ model: Plan, as: 'plan' }],
-    });
-    if (!company) {
-      throw new NotFoundException(`La compañía con ID ${id} no existe`);
-    }
-    return company;
   }
 
   async findBySlug(slug: string): Promise<Company> {
     const company = await this.companyModel.findOne({
       where: { slug: slug.toLowerCase().trim() },
-      include: [{ model: Plan, as: 'plan' }],
+      include: [
+        {
+          model: Plan,
+          attributes: ['id', 'name', 'slug', 'priceMonthly', 'currency', 'isTrial', 'badgeColor'],
+        },
+      ],
     });
+
     if (!company) {
-      throw new NotFoundException(`La compañía con slug '${slug}' no existe`);
+      throw new NotFoundException(`Compañía con slug '${slug}' no encontrada`);
     }
+
+    return company;
+  }
+
+  async findById(id: number): Promise<Company> {
+    const company = await this.companyModel.findByPk(id, {
+      include: [
+        {
+          model: Plan,
+          attributes: ['id', 'name', 'slug', 'priceMonthly', 'currency', 'isTrial', 'badgeColor'],
+        },
+      ],
+    });
+
+    if (!company) {
+      throw new NotFoundException(`Compañía con ID ${id} no encontrada`);
+    }
+
     return company;
   }
 
   async update(id: number, dto: UpdateCompanyDto, actorUserId?: number): Promise<Company> {
-    const company = await this.companyModel.findByPk(id, {
-      include: [{ model: Plan, as: 'plan' }],
-    });
-    if (!company) {
-      throw new NotFoundException(`La compañía con ID ${id} no existe`);
-    }
+    const company = await this.findById(id);
 
     if (dto.slug && dto.slug.toLowerCase().trim() !== company.slug) {
-      const slugTaken = await this.companyModel.findOne({
-        where: { slug: dto.slug.toLowerCase().trim(), id: { [Op.ne]: id } },
+      const collision = await this.companyModel.findOne({
+        where: { slug: dto.slug.toLowerCase().trim() },
       });
-      if (slugTaken) {
-        throw new BadRequestException(`El slug '${dto.slug}' ya se encuentra en uso por otra compañía`);
+      if (collision && collision.id !== id) {
+        throw new BadRequestException(`El slug '${dto.slug}' ya se encuentra utilizado por otra compañía`);
       }
     }
 
-    const resolvedPlan =
-      dto.planId !== undefined && dto.planId !== null
-        ? await this.plansService.findById(dto.planId)
-        : null;
+    let planOrLimitsChanged = false;
+    let resolvedPlan: Plan | null = null;
+    if (dto.planId !== undefined && dto.planId !== company.planId) {
+      planOrLimitsChanged = true;
+      resolvedPlan = dto.planId ? await this.plansService.findById(dto.planId) : null;
+    }
 
-    const planOrLimitsChanged =
-      (dto.planId !== undefined && dto.planId !== company.planId) ||
-      (dto.useCustomLimits !== undefined && dto.useCustomLimits !== company.useCustomLimits);
+    if (
+      dto.useCustomLimits !== undefined ||
+      dto.maxUsers !== undefined ||
+      dto.maxPages !== undefined ||
+      dto.maxDocuments !== undefined ||
+      dto.maxStorageMb !== undefined ||
+      dto.maxAiQueriesMonthly !== undefined
+    ) {
+      planOrLimitsChanged = true;
+    }
 
     const transaction = await this.sequelize.transaction();
     try {
       const prevData = company.toJSON();
       const payloadDto: any = { ...dto, slug: dto.slug ? dto.slug.toLowerCase().trim() : company.slug };
 
+      if (payloadDto.maxPages !== undefined && payloadDto.maxDocuments === undefined) {
+        payloadDto.maxDocuments = payloadDto.maxPages;
+      } else if (payloadDto.maxDocuments !== undefined && payloadDto.maxPages === undefined) {
+        payloadDto.maxPages = payloadDto.maxDocuments;
+      }
+
       if (dto.status === CompanyStatus.ACTIVE) {
-        await Users.update({ status: UserStatus.ACTIVE }, { where: { companyId: id }, transaction });
-        if (company.trialEndsAt && new Date(company.trialEndsAt) <= new Date() && dto.trialEndsAt === undefined) {
+        await this.activateCompanyUsersAndAdmin(id, transaction);
+        if (
+          company.isTrial ||
+          (company.trialEndsAt && new Date(company.trialEndsAt) <= new Date() && dto.trialEndsAt === undefined)
+        ) {
           payloadDto.trialEndsAt = null;
           payloadDto.isTrial = false;
         }
       } else if (dto.status === CompanyStatus.INACTIVE || dto.status === CompanyStatus.SUSPENDED) {
-        await Users.update({ status: UserStatus.INACTIVE }, { where: { companyId: id }, transaction });
+        await this.deactivateCompanyUsers(id, transaction);
       }
 
       await company.update(payloadDto, { transaction });
       await transaction.commit();
+
+      if (dto.status === CompanyStatus.ACTIVE) {
+        await this.ftpDevicesService?.syncCompanyDevicesStatus(id, true);
+      } else if (
+        dto.status === CompanyStatus.INACTIVE ||
+        dto.status === CompanyStatus.SUSPENDED
+      ) {
+        await this.ftpDevicesService?.syncCompanyDevicesStatus(id, false);
+      }
 
       await this.auditService.log({
         action: AuditAction.UPDATE,
@@ -259,19 +305,28 @@ export class CompaniesService {
       const prevStatus = company.status;
       const updates: any = { status };
 
-      // Si el Superadmin reactiva una empresa inactiva/vencida, reactiva usuarios y limpia trial vencido
+      // Si el Superadmin reactiva una empresa inactiva/vencida, reactiva usuarios, asegura el admin y limpia trial vencido
       if (status === CompanyStatus.ACTIVE) {
-        await Users.update({ status: UserStatus.ACTIVE }, { where: { companyId: id }, transaction });
-        if (company.trialEndsAt && new Date(company.trialEndsAt) <= new Date()) {
+        await this.activateCompanyUsersAndAdmin(id, transaction);
+        if (company.isTrial || (company.trialEndsAt && new Date(company.trialEndsAt) <= new Date())) {
           updates.trialEndsAt = null;
           updates.isTrial = false;
         }
       } else if (status === CompanyStatus.INACTIVE || status === CompanyStatus.SUSPENDED) {
-        await Users.update({ status: UserStatus.INACTIVE }, { where: { companyId: id }, transaction });
+        await this.deactivateCompanyUsers(id, transaction);
       }
 
       await company.update(updates, { transaction });
       await transaction.commit();
+
+      if (status === CompanyStatus.ACTIVE) {
+        await this.ftpDevicesService?.syncCompanyDevicesStatus(id, true);
+      } else if (
+        status === CompanyStatus.INACTIVE ||
+        status === CompanyStatus.SUSPENDED
+      ) {
+        await this.ftpDevicesService?.syncCompanyDevicesStatus(id, false);
+      }
 
       await this.auditService.log({
         action: AuditAction.STATUS_CHANGE,
@@ -280,10 +335,13 @@ export class CompaniesService {
         companyId: company.id,
         userId: actorUserId,
         payload: { from: prevStatus, to: status },
-        description: `Cambio de estado de la compañía '${company.name}' a ${status}`,
+        description:
+          status === CompanyStatus.ACTIVE
+            ? `Se activó la compañía '${company.name}' y se reactivó su usuario administrador`
+            : `Se suspendió/desactivó la compañía '${company.name}' y sus usuarios asociados`,
       });
 
-      return company;
+      return this.findById(id);
     } catch (error) {
       await transaction.rollback();
       throw error;
@@ -295,9 +353,11 @@ export class CompaniesService {
     const transaction = await this.sequelize.transaction();
     try {
       const deletedData = company.toJSON();
-      await Users.update({ status: UserStatus.INACTIVE }, { where: { companyId: id }, transaction });
+      await this.deactivateCompanyUsers(id, transaction);
       await company.destroy({ transaction });
       await transaction.commit();
+
+      await this.ftpDevicesService?.syncCompanyDevicesStatus(id, false, true);
 
       await this.auditService.log({
         action: AuditAction.DELETE,
@@ -315,5 +375,75 @@ export class CompaniesService {
       this.logger.error(`Error al eliminar la compañía ${id}: ${error.message}`);
       throw error;
     }
+  }
+
+  /**
+   * Reactiva los usuarios de la compañía, garantizando de manera explícita que
+   * el usuario administrador (rol company_admin o isAdmin: true) pase a estado ACTIVE.
+   */
+  private async activateCompanyUsersAndAdmin(
+    companyId: number,
+    transaction: any,
+  ): Promise<number> {
+    // 1. Activar todos los usuarios pertenecientes a la compañía
+    await Users.update(
+      { status: UserStatus.ACTIVE },
+      { where: { companyId }, transaction },
+    );
+
+    // 2. Localizar y asegurar activación del rol de administrador de compañía
+    const adminRole = await Role.findOne({
+      where: { slug: { [Op.in]: ['company_admin', 'admin'] } },
+      transaction,
+    });
+
+    const adminWhere: any = {
+      companyId,
+      [Op.or]: [
+        { isAdmin: true },
+        ...(adminRole ? [{ roleId: adminRole.id }] : []),
+      ],
+    };
+
+    const [adminUpdatedCount] = await Users.update(
+      { status: UserStatus.ACTIVE },
+      { where: adminWhere, transaction },
+    );
+
+    // 3. Respaldo: si por alguna inconsistencia ningún usuario tenía isAdmin ni rol admin,
+    // promover al usuario más antiguo de la compañía a administrador y dejarlo ACTIVO
+    if (adminUpdatedCount === 0) {
+      const firstUser = await Users.findOne({
+        where: { companyId },
+        order: [['id', 'ASC']],
+        transaction,
+      });
+
+      if (firstUser) {
+        await firstUser.update(
+          {
+            status: UserStatus.ACTIVE,
+            isAdmin: true,
+            ...(adminRole ? { roleId: adminRole.id } : {}),
+          },
+          { transaction },
+        );
+      }
+    }
+
+    return adminUpdatedCount;
+  }
+
+  /**
+   * Pasa a estado inactivo los usuarios de una compañía al suspenderla o desactivarla.
+   */
+  private async deactivateCompanyUsers(
+    companyId: number,
+    transaction: any,
+  ): Promise<void> {
+    await Users.update(
+      { status: UserStatus.INACTIVE },
+      { where: { companyId }, transaction },
+    );
   }
 }

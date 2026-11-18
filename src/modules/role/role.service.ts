@@ -215,12 +215,12 @@ export class RoleService extends CrudService<Role> {
     });
   }
 
-  override async findAll(user?: any): Promise<any[]> {
-    return this.queryScopedRoles(user, true);
+  override async findAll(user?: any, requestedCompanyId?: number): Promise<any[]> {
+    return this.queryScopedRoles(user, true, requestedCompanyId);
   }
 
-  async findEditableRoles(user?: any): Promise<any[]> {
-    return this.queryScopedRoles(user, false);
+  async findEditableRoles(user?: any, requestedCompanyId?: number): Promise<any[]> {
+    return this.queryScopedRoles(user, false, requestedCompanyId);
   }
 
   override async findOne(id: number, user?: any): Promise<Role> {
@@ -252,13 +252,32 @@ export class RoleService extends CrudService<Role> {
     return role;
   }
 
-  private async queryScopedRoles(user: any, includePermissions: boolean): Promise<any[]> {
+  private async queryScopedRoles(
+    user: any,
+    includePermissions: boolean,
+    requestedCompanyId?: number,
+  ): Promise<any[]> {
     if (isPlatformSuperAdmin(user)) {
+      const validCompanyId =
+        requestedCompanyId && Number.isInteger(requestedCompanyId) && requestedCompanyId > 0
+          ? requestedCompanyId
+          : null;
+
+      const whereClause: any = validCompanyId
+        ? {
+            slug: { [Op.ne]: 'superadmin' },
+            [Op.or]: [
+              { companyId: null, slug: { [Op.in]: TENANT_BASE_ROLE_SLUGS } },
+              { companyId: validCompanyId },
+            ],
+          }
+        : {
+            companyId: null,
+            slug: { [Op.in]: TENANT_BASE_ROLE_SLUGS },
+          };
+
       const baseRoles = await this.roleModel.findAll({
-        where: {
-          companyId: null,
-          slug: { [Op.in]: TENANT_BASE_ROLE_SLUGS },
-        },
+        where: whereClause,
         include: includePermissions ? [Permission] : [],
         order: [['id', 'ASC']],
       });

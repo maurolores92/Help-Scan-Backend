@@ -146,6 +146,17 @@ export class Company extends Model {
   declare maxUsers: number | null;
 
   /**
+   * Override de cantidad máxima de hojas/páginas (`null` = ilimitado / heredado del plan).
+   */
+  @Column({
+    type: DataType.INTEGER,
+    allowNull: true,
+    defaultValue: null,
+    field: 'max_pages',
+  })
+  declare maxPages: number | null;
+
+  /**
    * Override de cantidad máxima de documentos PDF (`null` = ilimitado / heredado del plan).
    */
   @Column({
@@ -155,6 +166,17 @@ export class Company extends Model {
     field: 'max_documents',
   })
   declare maxDocuments: number | null;
+
+  /**
+   * Contador acumulativo total de hojas/páginas subidas históricamente (odómetro, nunca disminuye al borrar archivos).
+   */
+  @Column({
+    type: DataType.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'total_pages_uploaded',
+  })
+  declare totalPagesUploaded: number;
 
   /**
    * Override de almacenamiento físico máximo en MB (`null` = ilimitado / heredado del plan).

@@ -1,12 +1,13 @@
 import { BadRequestException } from '@nestjs/common';
-import { existsSync, mkdirSync } from 'fs';
-import { isAbsolute, join, resolve, sep } from 'path';
+import { existsSync, mkdirSync, readdirSync, renameSync } from 'fs';
+import { basename, isAbsolute, join, resolve, sep } from 'path';
 
 export interface TenantStorageDirectories {
   baseDir: string;
   inboxDir: string;
   vaultDir: string;
   quarantineDir: string;
+  imagesDir: string;
 }
 
 /**
@@ -21,17 +22,21 @@ export function getBackendRootPath(): string {
 
 /**
  * Obtiene la ruta raíz del almacenamiento de archivos de la plataforma.
- * Configurable mediante `STORAGE_ROOT_PATH`; por defecto apunta a `HC-SCAN-Backend/storage`.
+ * Configurable mediante `STORAGE_ROOT_PATH` o `STORAGE_ROOT` o `UPLOADS_DIR`;
+ * por defecto centraliza todo en `HC-SCAN-Backend/uploads`.
  */
 export function getStorageRootPath(): string {
-  const envPath = process.env.STORAGE_ROOT_PATH?.trim();
+  const envPath =
+    process.env.STORAGE_ROOT_PATH?.trim() ||
+    process.env.STORAGE_ROOT?.trim() ||
+    process.env.UPLOADS_DIR?.trim();
   const backendRoot = getBackendRootPath();
 
   const storagePath = envPath
     ? isAbsolute(envPath)
       ? resolve(envPath)
       : resolve(backendRoot, envPath)
-    : resolve(backendRoot, 'storage');
+    : resolve(backendRoot, 'uploads');
 
   if (!existsSync(storagePath)) {
     mkdirSync(storagePath, { recursive: true });
@@ -52,28 +57,89 @@ export function sanitizeTenantId(companyId: number | string): number {
 }
 
 /**
- * Aprovisiona de forma idempotente la estructura aislada de una compañía:
- * `storage/tenancy/company_<id>/{inbox,vault,quarantine}`
+ * Aprovisiona de forma idempotente la estructura aislada de una compañía dentro de uploads:
+ * `uploads/tenancy/company_<id>_<nombre>/{inbox,vault,quarantine,images}`
  */
-export function ensureTenantDirectories(companyId: number | string): TenantStorageDirectories {
+export function ensureTenantDirectories(
+  companyId: number | string,
+  companySlugOrName?: string,
+): TenantStorageDirectories {
   const safeId = sanitizeTenantId(companyId);
   const tenancyRoot = join(getStorageRootPath(), 'tenancy');
-  const baseDir = join(tenancyRoot, `company_${safeId}`);
+  if (!existsSync(tenancyRoot)) {
+    mkdirSync(tenancyRoot, { recursive: true });
+  }
+
+  let folderName = `company_${safeId}`;
+  if (companySlugOrName && companySlugOrName.trim()) {
+    const cleanSlug = companySlugOrName
+      .trim()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9_-]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '');
+    if (cleanSlug) {
+      folderName = `company_${safeId}_${cleanSlug}`;
+      const legacyFolder = join(tenancyRoot, `company_${safeId}`);
+      const newFolder = join(tenancyRoot, folderName);
+      if (existsSync(legacyFolder) && !existsSync(newFolder)) {
+        try {
+          renameSync(legacyFolder, newFolder);
+        } catch {
+          folderName = `company_${safeId}`;
+        }
+      }
+    }
+  } else {
+    // Si no se pasó slug, verificar si ya existe una carpeta como company_<id>_* en disco
+    try {
+      const existing = readdirSync(tenancyRoot, { withFileTypes: true });
+      const match = existing.find(
+        (d) =>
+          d.isDirectory() &&
+          (d.name === `company_${safeId}` || d.name.startsWith(`company_${safeId}_`)),
+      );
+      if (match) {
+        folderName = match.name;
+      }
+    } catch {}
+  }
+
+  const baseDir = join(tenancyRoot, folderName);
   const inboxDir = join(baseDir, 'inbox');
   const vaultDir = join(baseDir, 'vault');
   const quarantineDir = join(baseDir, 'quarantine');
+  const imagesDir = join(baseDir, 'images');
 
-  for (const dir of [tenancyRoot, baseDir, inboxDir, vaultDir, quarantineDir]) {
+  for (const dir of [baseDir, inboxDir, vaultDir, quarantineDir, imagesDir]) {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
   }
 
-  return { baseDir, inboxDir, vaultDir, quarantineDir };
+  return { baseDir, inboxDir, vaultDir, quarantineDir, imagesDir };
 }
 
 /**
- * Retorna la carpeta raíz del tenant (`storage/tenancy/company_<id>`).
+ * Retorna la carpeta de imágenes (`uploads/tenancy/company_<id>/images`) para la compañía.
+ */
+export function getTenantImagesPath(companyId: number | string, subFolder?: string): string {
+  const { imagesDir } = ensureTenantDirectories(companyId);
+  if (!subFolder || !subFolder.trim()) {
+    return imagesDir;
+  }
+  const cleanSub = subFolder.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+  const targetDir = join(imagesDir, cleanSub);
+  if (!existsSync(targetDir)) {
+    mkdirSync(targetDir, { recursive: true });
+  }
+  return targetDir;
+}
+
+/**
+ * Retorna la carpeta raíz del tenant (`uploads/tenancy/company_<id>`).
  */
 export function getTenantStoragePath(companyId: number | string): string {
   return ensureTenantDirectories(companyId).baseDir;
@@ -84,6 +150,83 @@ export function getTenantStoragePath(companyId: number | string): string {
  */
 export function getTenantInboxPath(companyId: number | string): string {
   return ensureTenantDirectories(companyId).inboxDir;
+}
+
+/**
+ * Normaliza y valida el nombre de subcarpeta de dispositivo FTP para evitar Path Traversal.
+ */
+export function sanitizeFtpSubFolder(subFolder: string): string {
+  const cleaned = String(subFolder || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 64);
+
+  return cleaned || 'default_printer';
+}
+
+/**
+ * Crea y retorna la carpeta `inbox/<subFolder>` aislada para un equipo HP específico.
+ */
+export function ensureTenantFtpInboxDir(
+  companyId: number | string,
+  subFolder?: string | null,
+): { absoluteDir: string; relativeToStorage: string; cleanSubFolder: string } {
+  const safeId = sanitizeTenantId(companyId);
+  const { inboxDir, baseDir } = ensureTenantDirectories(safeId);
+  const folderName = basename(baseDir);
+  if (!subFolder || !subFolder.trim()) {
+    return {
+      absoluteDir: inboxDir,
+      relativeToStorage: `tenancy/${folderName}/inbox`,
+      cleanSubFolder: '',
+    };
+  }
+
+  const cleanSubFolder = sanitizeFtpSubFolder(subFolder);
+  const absoluteDir = join(inboxDir, cleanSubFolder);
+  if (!existsSync(absoluteDir)) {
+    mkdirSync(absoluteDir, { recursive: true });
+  }
+
+  return {
+    absoluteDir,
+    relativeToStorage: `tenancy/${folderName}/inbox/${cleanSubFolder}`,
+    cleanSubFolder,
+  };
+}
+
+/**
+ * Traduce rutas físicas reportadas por el contenedor SFTPGo al path real dentro del contenedor Backend.
+ */
+export function resolveInboxFileFromWebhook(
+  companyId: number,
+  reportedPath: string,
+  fallbackSubFolder?: string | null,
+): string {
+  const root = getStorageRootPath();
+  const rootPrefix = root.endsWith(sep) ? root : `${root}${sep}`;
+  const normalized = (reportedPath || '').replace(/\\/g, '/');
+
+  const tenancyIdx = normalized.indexOf('tenancy/');
+  if (tenancyIdx >= 0) {
+    const relFromTenancy = normalized.slice(tenancyIdx);
+    const candidate = resolve(root, relFromTenancy);
+    if (candidate.startsWith(rootPrefix)) {
+      return candidate;
+    }
+  }
+
+  // Fallback si SFTPGo reporta path relativo a la raíz del usuario chrooteado (ej. `/scan001.pdf`)
+  const fileNameOnly = normalized.split('/').filter(Boolean).pop() || '';
+  const { absoluteDir } = ensureTenantFtpInboxDir(companyId, fallbackSubFolder);
+  const fallbackCandidate = resolve(absoluteDir, fileNameOnly);
+  if (!fallbackCandidate.startsWith(rootPrefix)) {
+    throw new BadRequestException('Ruta de webhook fuera de los límites permitidos');
+  }
+  return fallbackCandidate;
 }
 
 /**
@@ -101,7 +244,8 @@ export function getTenantVaultMonthlyPath(
   refDate: Date = new Date(),
 ): { absoluteDir: string; relativeDir: string } {
   const safeId = sanitizeTenantId(companyId);
-  const { vaultDir } = ensureTenantDirectories(safeId);
+  const { vaultDir, baseDir } = ensureTenantDirectories(safeId);
+  const folderName = basename(baseDir);
   const year = String(refDate.getUTCFullYear());
   const month = String(refDate.getUTCMonth() + 1).padStart(2, '0');
   const absoluteDir = join(vaultDir, year, month);
@@ -110,13 +254,14 @@ export function getTenantVaultMonthlyPath(
     mkdirSync(absoluteDir, { recursive: true });
   }
 
-  const relativeDir = `tenancy/company_${safeId}/vault/${year}/${month}`;
+  const relativeDir = `tenancy/${folderName}/vault/${year}/${month}`;
   return { absoluteDir, relativeDir };
 }
 
 /**
  * Resuelve de forma segura la ruta física de un documento verificando que jamás salga de `STORAGE_ROOT_PATH`.
- * Mantiene compatibilidad hacia atrás con registros previos (`tenancy/<id>/<fileName>`).
+ * Mantiene compatibilidad hacia atrás con registros previos (`tenancy/<id>/<fileName>`) y con nombres
+ * de carpetas que incluyan o no el slug/nombre de la empresa.
  */
 export function resolveSafeStorageFilePath(
   relativePath: string,
@@ -136,12 +281,36 @@ export function resolveSafeStorageFilePath(
     return primaryCandidate;
   }
 
+  // Compatibilidad dinámica: si la ruta guardada fue `tenancy/company_1/...` y en disco se llama `tenancy/company_1_helpcopies/...`
+  const tenantDirMatch = normalizedRel.match(/^tenancy\/company_(\d+)(?:_[^/]+)?\/(.+)$/);
+  if (tenantDirMatch) {
+    const [, cId, restPath] = tenantDirMatch;
+    try {
+      const { baseDir } = ensureTenantDirectories(cId);
+      const dynamicCandidate = resolve(baseDir, restPath);
+      if (dynamicCandidate.startsWith(rootPrefix) && existsSync(dynamicCandidate)) {
+        return dynamicCandidate;
+      }
+    } catch {}
+  }
+
+  // Fallback si el archivo existía previamente en 'backend/storage'
+  const legacyStorageRoot = resolve(getBackendRootPath(), 'storage');
+  const legacyStorageCandidate = resolve(legacyStorageRoot, normalizedRel);
+  if (existsSync(legacyStorageCandidate)) {
+    return legacyStorageCandidate;
+  }
+
   // Fallback de compatibilidad para rutas antiguas `storage/tenancy/<id>/<fileName>`
   if (fallbackCompanyId && fallbackFileName) {
     const safeId = sanitizeTenantId(fallbackCompanyId);
     const legacyPath = resolve(root, 'tenancy', String(safeId), fallbackFileName);
     if (legacyPath.startsWith(rootPrefix) && existsSync(legacyPath)) {
       return legacyPath;
+    }
+    const legacyOldRootPath = resolve(legacyStorageRoot, 'tenancy', String(safeId), fallbackFileName);
+    if (existsSync(legacyOldRootPath)) {
+      return legacyOldRootPath;
     }
   }
 

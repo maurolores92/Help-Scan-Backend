@@ -49,11 +49,13 @@ export class RoleController {
   findAll(
     @GetUser() user: any,
     @Query('includeSuperAdmin') includeSuperAdmin?: string,
+    @Query('companyId') companyId?: string,
   ) {
+    const parsedCompanyId = companyId ? Number(companyId) : undefined;
     if (includeSuperAdmin === 'true') {
-      return this.roleService.findEditableRoles(user);
+      return this.roleService.findEditableRoles(user, parsedCompanyId);
     }
-    return this.roleService.findAll(user);
+    return this.roleService.findAll(user, parsedCompanyId);
   }
 
   @Get(':id')

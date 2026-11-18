@@ -87,6 +87,13 @@ export class CreateCompanyDto {
   @ValidateIf((_, val) => val !== null)
   @Type(() => Number)
   @IsInt()
+  @Min(1, { message: 'El límite de hojas/páginas debe ser al menos 1 o null (ilimitado)' })
+  maxPages?: number | null;
+
+  @IsOptional()
+  @ValidateIf((_, val) => val !== null)
+  @Type(() => Number)
+  @IsInt()
   @Min(1, { message: 'El límite de documentos debe ser al menos 1 o null (ilimitado)' })
   maxDocuments?: number | null;
 

@@ -32,10 +32,17 @@ import {
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
-  private assertTenantUserManager(user: any): number {
+  private assertTenantUserManager(
+    user: any,
+    requestedCompanyId?: number | string,
+  ): number {
     if (isPlatformSuperAdmin(user)) {
+      const parsedId = Number(requestedCompanyId);
+      if (Number.isInteger(parsedId) && parsedId > 0) {
+        return parsedId;
+      }
       throw new ForbiddenException(
-        'El Super Administrador de plataforma no gestiona usuarios operativos de compañías.',
+        'El Super Administrador de plataforma debe especificar la compañía para gestionar usuarios operativos.',
       );
     }
     return requireTenantCompanyId(user);
@@ -45,16 +52,48 @@ export class UsersController {
   @Auth()
   @RequirePermission('CREATE_USER')
   async create(@Body() createUserDto: CreateUserDto, @GetUser() user: any) {
-    const tenantCompanyId = this.assertTenantUserManager(user);
+    const tenantCompanyId = this.assertTenantUserManager(
+      user,
+      createUserDto.companyId,
+    );
     return this.usersService.create(createUserDto, user.id, tenantCompanyId);
   }
 
   @Get('all')
   @Auth()
   @RequirePermission('VIEW_USERS')
-  findAll(@GetUser() user: any) {
-    const tenantCompanyId = this.assertTenantUserManager(user);
+  findAll(
+    @GetUser() user: any,
+    @Query('companyId') queryCompanyId?: string,
+  ) {
+    const tenantCompanyId = this.assertTenantUserManager(
+      user,
+      queryCompanyId,
+    );
     return this.usersService.findAll(tenantCompanyId);
+  }
+
+  @Get('company/:companyId')
+  @Auth()
+  @RequirePermission('VIEW_USERS')
+  findByCompany(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @GetUser() user: any,
+  ) {
+    const tenantCompanyId = this.assertTenantUserManager(user, companyId);
+    return this.usersService.findAll(tenantCompanyId);
+  }
+
+  @Post('company/:companyId')
+  @Auth()
+  @RequirePermission('CREATE_USER')
+  createForCompany(
+    @Param('companyId', ParseIntPipe) companyId: number,
+    @Body() createUserDto: CreateUserDto,
+    @GetUser() user: any,
+  ) {
+    const tenantCompanyId = this.assertTenantUserManager(user, companyId);
+    return this.usersService.create(createUserDto, user.id, tenantCompanyId);
   }
 
   @Get('profile-with-roles')
@@ -118,9 +157,14 @@ export class UsersController {
     @GetUser() user: any,
     @Query(new ValidationPipe({ transform: true })) query: FindAllQuerysDto,
   ) {
-    const tenantCompanyId = this.assertTenantUserManager(user);
     const { page = 0, pageSize = 10, ...filters } = query;
-    filters.companyId = tenantCompanyId;
+    if (isPlatformSuperAdmin(user)) {
+      if (query.companyId) {
+        filters.companyId = Number(query.companyId);
+      }
+    } else {
+      filters.companyId = requireTenantCompanyId(user);
+    }
 
     return this.usersService.findAllQuerys(
       Number(page),

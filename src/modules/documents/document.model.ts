@@ -19,14 +19,20 @@ export enum DocumentSource {
 export enum DocumentStatus {
   PENDING = 'PENDING',
   PROCESSING = 'PROCESSING',
+  PENDING_APPROVAL = 'PENDING_APPROVAL',
+  VALIDATED = 'VALIDATED',
   PROCESSED = 'PROCESSED',
+  REJECTED = 'REJECTED',
   ERROR = 'ERROR',
 }
 
 export const DocumentStatusInfo = {
-  [DocumentStatus.PENDING]: { value: DocumentStatus.PENDING, label: 'Pendiente de IA', color: 'warning' },
-  [DocumentStatus.PROCESSING]: { value: DocumentStatus.PROCESSING, label: 'Procesando', color: 'info' },
+  [DocumentStatus.PENDING]: { value: DocumentStatus.PENDING, label: 'En Cola OCR', color: 'secondary' },
+  [DocumentStatus.PROCESSING]: { value: DocumentStatus.PROCESSING, label: 'Extrayendo con IA', color: 'info' },
+  [DocumentStatus.PENDING_APPROVAL]: { value: DocumentStatus.PENDING_APPROVAL, label: 'Pendiente de Aprobación', color: 'warning' },
+  [DocumentStatus.VALIDATED]: { value: DocumentStatus.VALIDATED, label: 'Validado', color: 'success' },
   [DocumentStatus.PROCESSED]: { value: DocumentStatus.PROCESSED, label: 'Procesado', color: 'success' },
+  [DocumentStatus.REJECTED]: { value: DocumentStatus.REJECTED, label: 'Rechazado', color: 'error' },
   [DocumentStatus.ERROR]: { value: DocumentStatus.ERROR, label: 'Error', color: 'error' },
 };
 
@@ -146,6 +152,13 @@ export class Document extends Model {
   declare documentDate: string | null;
 
   @Column({
+    type: DataType.DATEONLY,
+    allowNull: true,
+    field: 'due_date',
+  })
+  declare dueDate: string | null;
+
+  @Column({
     type: DataType.STRING(200),
     allowNull: true,
     field: 'issuer_name',
@@ -167,6 +180,34 @@ export class Document extends Model {
   declare recipientName: string | null;
 
   @Column({
+    type: DataType.STRING(50),
+    allowNull: true,
+    field: 'recipient_tax_id',
+  })
+  declare recipientTaxId: string | null;
+
+  @Column({
+    type: DataType.STRING(50),
+    allowNull: true,
+    field: 'recipient_phone',
+  })
+  declare recipientPhone: string | null;
+
+  @Column({
+    type: DataType.STRING(100),
+    allowNull: true,
+    field: 'recipient_email',
+  })
+  declare recipientEmail: string | null;
+
+  @Column({
+    type: DataType.STRING(255),
+    allowNull: true,
+    field: 'delivery_address',
+  })
+  declare deliveryAddress: string | null;
+
+  @Column({
     type: DataType.STRING(200),
     allowNull: true,
     field: 'responsible_person',
@@ -182,9 +223,99 @@ export class Document extends Model {
   @Column({
     type: DataType.DECIMAL(15, 2),
     allowNull: true,
+    field: 'net_amount',
+  })
+  declare netAmount: number | null;
+
+  @Column({
+    type: DataType.DECIMAL(15, 2),
+    allowNull: true,
+    field: 'tax_amount',
+  })
+  declare taxAmount: number | null;
+
+  @Column({
+    type: DataType.DECIMAL(15, 2),
+    allowNull: true,
     field: 'total_amount',
   })
   declare totalAmount: number | null;
+
+  @Column({
+    type: DataType.STRING(150),
+    allowNull: true,
+    field: 'payment_terms',
+  })
+  declare paymentTerms: string | null;
+
+  @Column({
+    type: DataType.STRING(60),
+    allowNull: true,
+    field: 'payment_method',
+  })
+  declare paymentMethod: string | null;
+
+  @Column({
+    type: DataType.STRING(100),
+    allowNull: true,
+    field: 'reference_number',
+  })
+  declare referenceNumber: string | null;
+
+  @Column({
+    type: DataType.STRING(30),
+    allowNull: true,
+  })
+  declare cae: string | null;
+
+  @Column({
+    type: DataType.STRING(60),
+    allowNull: true,
+    field: 'tax_condition',
+  })
+  declare taxCondition: string | null;
+
+  @Column({
+    type: DataType.STRING(50),
+    allowNull: true,
+    field: 'equipment_id',
+  })
+  declare equipmentId: string | null;
+
+  @Column({
+    type: DataType.STRING(100),
+    allowNull: true,
+    field: 'equipment_model',
+  })
+  declare equipmentModel: string | null;
+
+  @Column({
+    type: DataType.STRING(100),
+    allowNull: true,
+    field: 'meter_count',
+  })
+  declare meterCount: string | null;
+
+  @Column({
+    type: DataType.INTEGER,
+    allowNull: true,
+    field: 'validated_by_user_id',
+  })
+  declare validatedByUserId: number | null;
+
+  @Column({
+    type: DataType.DATE,
+    allowNull: true,
+    field: 'validated_at',
+  })
+  declare validatedAt: Date | null;
+
+  @Column({
+    type: DataType.TEXT,
+    allowNull: true,
+    field: 'validation_notes',
+  })
+  declare validationNotes: string | null;
 
   @Column({
     type: DataType.JSONB,
@@ -192,6 +323,24 @@ export class Document extends Model {
     defaultValue: [],
   })
   declare tags: string[] | null;
+
+  /**
+   * Artículos o ítems comerciales/técnicos extraídos del documento (código, descripción, cantidad, precios).
+   */
+  @Column({
+    type: DataType.JSONB,
+    allowNull: true,
+    defaultValue: [],
+    field: 'items',
+  })
+  declare items: Array<{
+    codigo?: string | null;
+    nombre: string;
+    cantidad?: number | null;
+    precioSinIva?: number | null;
+    precioFinal?: number | null;
+    ivaPorcentaje?: number | null;
+  }> | null;
 
   /**
    * Metadatos dinámicos libres en JSONB (attributes clave-valor abiertos según el rubro, items, involvedParties, dates, amounts).
@@ -247,6 +396,20 @@ export class Document extends Model {
     field: 'error_message',
   })
   declare errorMessage: string | null;
+
+  @Column({
+    type: DataType.INTEGER,
+    allowNull: true,
+    field: 'ftp_device_id',
+  })
+  declare ftpDeviceId: number | null;
+
+  @Column({
+    type: DataType.STRING(120),
+    allowNull: true,
+    field: 'ftp_device_name',
+  })
+  declare ftpDeviceName: string | null;
 
   @Column(DataType.VIRTUAL)
   get statusInfo() {

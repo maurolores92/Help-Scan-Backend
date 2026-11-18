@@ -59,6 +59,26 @@ export const NOTIFICATION_REGISTRY: Record<string, NotificationDefinition> = {
     defaultInApp: true,
     defaultRecipients: ['company_admin', 'target_user'],
   },
+  'ftp_device.configured': {
+    key: 'ftp_device.configured',
+    category: NotificationCategory.DOCUMENTS,
+    label: 'Acceso FTP / equipo HP configurado',
+    description: 'Cuando se crea, modifica o cambia de estado un acceso FTP/SFTP/FTPS para una impresora HP',
+    icon: 'tabler:printer',
+    emoji: '🖨️',
+    defaultInApp: true,
+    defaultRecipients: ['company_admin', 'superadmin'],
+  },
+  'ftp_device.file_rejected': {
+    key: 'ftp_device.file_rejected',
+    category: NotificationCategory.DOCUMENTS,
+    label: 'Archivo FTP rechazado o en cuarentena',
+    description: 'Cuando un equipo HP sube un archivo inválido, corrupto o que excede la cuota de almacenamiento',
+    icon: 'tabler:shield-exclamation',
+    emoji: '🚫',
+    defaultInApp: true,
+    defaultRecipients: ['company_admin'],
+  },
 
   // ── 2. Compañías / Tenants & Planes (Plataforma y Límites) ────────────────
   'system.company_created': {

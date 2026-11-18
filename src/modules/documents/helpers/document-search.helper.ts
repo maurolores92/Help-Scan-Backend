@@ -18,8 +18,21 @@ export const buildDocumentSearchWhere = (
     );
   }
 
-  const { search, status, source, documentType, dateFrom, dateTo } = query;
+  const {
+    search,
+    status,
+    source,
+    documentType,
+    dateFrom,
+    dateTo,
+    equipmentId,
+    equipmentModel,
+    recipientTaxId,
+    minAmount,
+    maxAmount,
+  } = query;
   const andConditions: any[] = [{ companyId: scopedCompanyId }];
+  const likeOp = Op.iLike ? Op.iLike : Op.like;
 
   if (status) {
     andConditions.push({ status });
@@ -33,6 +46,25 @@ export const buildDocumentSearchWhere = (
     andConditions.push({ documentType: documentType.toLowerCase().trim() });
   }
 
+  if (equipmentId) {
+    andConditions.push({ equipmentId: { [likeOp]: `%${equipmentId.trim()}%` } });
+  }
+
+  if (equipmentModel) {
+    andConditions.push({ equipmentModel: { [likeOp]: `%${equipmentModel.trim()}%` } });
+  }
+
+  if (recipientTaxId) {
+    andConditions.push({ recipientTaxId: { [likeOp]: `%${recipientTaxId.trim()}%` } });
+  }
+
+  if (minAmount !== undefined || maxAmount !== undefined) {
+    const amountCondition: any = {};
+    if (minAmount !== undefined) amountCondition[Op.gte] = minAmount;
+    if (maxAmount !== undefined) amountCondition[Op.lte] = maxAmount;
+    andConditions.push({ totalAmount: amountCondition });
+  }
+
   if (dateFrom || dateTo) {
     const dateRange: Record<symbol, string> = {};
     if (dateFrom) dateRange[Op.gte] = dateFrom;
@@ -43,7 +75,6 @@ export const buildDocumentSearchWhere = (
   if (search && search.trim().length > 0) {
     const cleanTerm = search.trim();
     const wildcard = `%${cleanTerm}%`;
-    const likeOp = Op.iLike ? Op.iLike : Op.like;
     const escapedLiteralTerm = cleanTerm.replace(/'/g, "''");
 
     const orClauses: any[] = [
@@ -55,6 +86,12 @@ export const buildDocumentSearchWhere = (
       { issuerName: { [likeOp]: wildcard } },
       { issuerTaxId: { [likeOp]: wildcard } },
       { recipientName: { [likeOp]: wildcard } },
+      { recipientTaxId: { [likeOp]: wildcard } },
+      { deliveryAddress: { [likeOp]: wildcard } },
+      { equipmentId: { [likeOp]: wildcard } },
+      { equipmentModel: { [likeOp]: wildcard } },
+      { referenceNumber: { [likeOp]: wildcard } },
+      { cae: { [likeOp]: wildcard } },
       { responsiblePerson: { [likeOp]: wildcard } },
       { summary: { [likeOp]: wildcard } },
       { rawText: { [likeOp]: wildcard } },

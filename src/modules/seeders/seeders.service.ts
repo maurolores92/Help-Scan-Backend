@@ -5,6 +5,7 @@ import { Role } from '../role/role.model';
 import { Users } from '../users/users.model';
 import { Company, CompanyStatus } from '../companies/company.model';
 import { Plan } from '../plans/plan.model';
+import { PlanExchangeConfig } from '../plans/models/plan-exchange-config.model';
 import { Permission } from '../permissions/permission.model';
 import { RolePermission } from '../permissions/role-permission/role-permission.model';
 import { UserPermission } from '../permissions/user-permission/user-permission.model';
@@ -33,19 +34,10 @@ export class SeedService {
       if (created) {
         this.logger.log(`[SeedService] Plan base creado: ${plan.name} (${plan.slug})`);
       } else {
-        await plan.update({
-          name: p.name,
-          description: p.description,
-          priceMonthly: p.priceMonthly,
-          currency: (p as any).currency || 'ARS',
-          isTrial: (p as any).isTrial ?? false,
-          trialDays: (p as any).trialDays ?? null,
-          maxUsers: p.maxUsers,
-          maxDocuments: p.maxDocuments,
-          maxStorageMb: p.maxStorageMb,
-          maxAiQueriesMonthly: p.maxAiQueriesMonthly,
-          badgeColor: p.badgeColor,
-        });
+        // Preservar siempre las modificaciones del administrador (precio en dólares, límites, descripción)
+        if (!plan.currency) {
+          await plan.update({ currency: (p as any).currency || 'USD' });
+        }
       }
 
       if (plan.slug === 'enterprise') enterprisePlan = plan;
@@ -275,6 +267,27 @@ export class SeedService {
     }
   }
 
+  async ensurePlanExchangeConfig(): Promise<void> {
+    try {
+      const [config, created] = await PlanExchangeConfig.findOrCreate({
+        where: { id: 1 },
+        defaults: {
+          id: 1,
+          usdRate: 1250.0,
+          roundPrices: true,
+          updatedBy: null,
+        },
+      });
+      if (created) {
+        this.logger.log(
+          '[SeedService] Configuración de cotización base aprovisionada: 1 USD = $1.250 ARS (Redondeo: ON)',
+        );
+      }
+    } catch (err: any) {
+      this.logger.warn(`[SeedService] Error asegurando PlanExchangeConfig: ${err?.message}`);
+    }
+  }
+
   async seedRoles() {
     await this.ensureSystemRoles();
     return { success: true, message: 'Roles creados exitosamente' };
@@ -284,10 +297,12 @@ export class SeedService {
     const { enterprisePlan } = await this.ensureDefaultPlans();
     await this.ensureDefaultCompany(enterprisePlan?.id);
     await this.ensureSuperAdminUser();
+    await this.ensurePlanExchangeConfig();
     return { success: true, message: 'Usuarios base creados exitosamente' };
   }
 
   async seedAll() {
+    await this.ensurePlanExchangeConfig();
     const { enterprisePlan } = await this.ensureDefaultPlans();
     await this.ensureDefaultCompany(enterprisePlan?.id);
     await this.ensureSystemRoles();

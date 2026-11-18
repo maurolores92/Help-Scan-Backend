@@ -48,6 +48,17 @@ export class CompanyMonthlyUsage extends Model {
   })
   declare period: string;
 
+  /**
+   * Cantidad acumulativa de páginas/hojas subidas en este período mensual (nunca disminuye al borrar archivos).
+   */
+  @Column({
+    type: DataType.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'pages_count',
+  })
+  declare pagesCount: number;
+
   @Column({
     type: DataType.INTEGER,
     allowNull: false,

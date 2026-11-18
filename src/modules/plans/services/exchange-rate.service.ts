@@ -1,16 +1,22 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { InjectModel } from '@nestjs/sequelize';
 import { Plan } from '../plan.model';
+import { PlanExchangeConfig } from '../models/plan-exchange-config.model';
+import { UpdateExchangeConfigDto } from '../dto/update-exchange-config.dto';
+import { AuditService } from '../../audit/audit.service';
+import { AuditAction } from '../../audit/audit.model';
 
 export interface PlanPublicWithExchangeRate {
   id: number;
   name: string;
   slug: string;
   description: string | null;
-  priceMonthly: number; // Siempre en PESOS (ARS), redondeado hacia arriba
+  priceMonthly: number; // Expresado en PESOS (ARS), calculado según cotización y redondeo
   currency: 'ARS';
   originalPrice: number;
   originalCurrency: 'ARS' | 'USD';
   exchangeRate: number;
+  roundPrices: boolean;
   isTrial: boolean;
   trialDays: number | null;
   maxUsers: number | null;
@@ -22,78 +28,164 @@ export interface PlanPublicWithExchangeRate {
   isDefault: boolean;
 }
 
+export interface ExchangeConfigResponse {
+  id: number;
+  usdRate: number;
+  roundPrices: boolean;
+  updatedBy: number | null;
+  updatedAt?: Date;
+}
+
 @Injectable()
-export class ExchangeRateService {
+export class ExchangeRateService implements OnModuleInit {
   private readonly logger = new Logger(ExchangeRateService.name);
 
-  // Fallback por defecto si no hay conexión a internet o la API externa falla
   private readonly defaultRate = process.env.USD_EXCHANGE_RATE
     ? Number(process.env.USD_EXCHANGE_RATE)
     : 1250;
 
-  private cachedRate: number | null = null;
-  private lastFetchedAt = 0;
-  private readonly cacheTtlMs = 30 * 60 * 1000; // 30 minutos
+  constructor(
+    @InjectModel(PlanExchangeConfig)
+    private readonly configModel: typeof PlanExchangeConfig,
+    private readonly auditService: AuditService,
+  ) {}
+
+  async onModuleInit() {
+    await this.ensureTableAndDefault();
+  }
 
   /**
-   * Obtiene la cotización oficial del dólar (venta) en Argentina.
-   * Utiliza la API pública de dolarapi.com con caché en memoria y fallback seguro.
+   * Asegura que la tabla plan_exchange_config exista y contenga al menos un registro inicial.
    */
-  async getUsdRate(): Promise<number> {
-    const now = Date.now();
-    if (this.cachedRate && now - this.lastFetchedAt < this.cacheTtlMs) {
-      return this.cachedRate;
+  async ensureTableAndDefault(): Promise<PlanExchangeConfig> {
+    try {
+      await this.configModel.sync();
+    } catch (err: any) {
+      this.logger.warn(`[ExchangeRateService] Aviso al sincronizar plan_exchange_config: ${err.message}`);
     }
 
     try {
-      // Usar AbortSignal con timeout de 3.5 segundos para evitar bloqueos
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3500);
-
-      const response = await fetch('https://dolarapi.com/v1/dolares/oficial', {
-        signal: controller.signal,
-        headers: { Accept: 'application/json' },
-      });
-
-      clearTimeout(timeoutId);
-
-      if (response.ok) {
-        const data = (await response.json()) as { venta?: number; compra?: number };
-        const rate = Number(data.venta || data.compra);
-        if (rate && !isNaN(rate) && rate > 0) {
-          this.cachedRate = rate;
-          this.lastFetchedAt = now;
-          this.logger.log(`[ExchangeRateService] Cotización USD Oficial obtenida con éxito: $${rate} ARS`);
-          return rate;
-        }
+      let config = await this.configModel.findOne({ order: [['id', 'ASC']] });
+      if (!config) {
+        config = await this.configModel.create({
+          usdRate: this.defaultRate,
+          roundPrices: true,
+          updatedBy: null,
+        } as any);
+        this.logger.log(`[ExchangeRateService] Inicializada configuración base de cotización: $${this.defaultRate} ARS`);
       }
-    } catch (error: any) {
-      this.logger.warn(
-        `[ExchangeRateService] No se pudo consultar la API de cotización USD (${error.message}). Se usará cotización de referencia: $${this.defaultRate} ARS`,
-      );
+      return config;
+    } catch (err: any) {
+      this.logger.warn(`[ExchangeRateService] Error al inicializar registro de cotización: ${err.message}`);
+      return {
+        id: 1,
+        usdRate: this.defaultRate,
+        roundPrices: true,
+        updatedBy: null,
+      } as PlanExchangeConfig;
+    }
+  }
+
+  /**
+   * Obtiene la configuración de cotización y redondeo persistida en base de datos.
+   * Si no existe aún un registro o la tabla está ausente, la crea automáticamente.
+   */
+  async getConfig(): Promise<PlanExchangeConfig> {
+    try {
+      const config = await this.configModel.findOne({ order: [['id', 'ASC']] });
+      if (!config) {
+        return await this.ensureTableAndDefault();
+      }
+      return config;
+    } catch (err: any) {
+      this.logger.warn(`[ExchangeRateService] Error al consultar plan_exchange_config (${err.message}). Reintentando tras sincronización...`);
+      return await this.ensureTableAndDefault();
+    }
+  }
+
+  /**
+   * Actualiza la cotización del dólar y/o la política de redondeo.
+   * Exclusivo del Super Administrador con registro en auditoría.
+   */
+  async updateConfig(
+    dto: UpdateExchangeConfigDto,
+    actorUserId?: number,
+  ): Promise<ExchangeConfigResponse> {
+    let config: PlanExchangeConfig | null = null;
+    try {
+      config = await this.configModel.findOne({ order: [['id', 'ASC']] });
+    } catch (err: any) {
+      this.logger.warn(`[ExchangeRateService] Tabla ausente al actualizar. Sincronizando modelo...`);
+      await this.configModel.sync();
+      config = await this.configModel.findOne({ order: [['id', 'ASC']] });
     }
 
-    // Fallback si la API no respondió o dio error
-    return this.cachedRate || this.defaultRate;
+    const previous = config ? config.toJSON() : null;
+
+    if (!config) {
+      config = await this.configModel.create({
+        usdRate: dto.usdRate,
+        roundPrices: dto.roundPrices !== undefined ? dto.roundPrices : true,
+        updatedBy: actorUserId ?? null,
+      } as any);
+    } else {
+      if (dto.usdRate !== undefined) {
+        config.usdRate = dto.usdRate;
+      }
+      if (dto.roundPrices !== undefined) {
+        config.roundPrices = dto.roundPrices;
+      }
+      config.updatedBy = actorUserId ?? null;
+      await config.save();
+    }
+
+    await this.auditService.log({
+      action: AuditAction.UPDATE,
+      entity: 'PlanExchangeConfig',
+      entityId: config.id,
+      companyId: null,
+      userId: actorUserId,
+      payload: { previous, updated: config.toJSON() },
+      description: `Actualizada cotización USD a $${config.usdRate} ARS (Redondeo: ${config.roundPrices ? 'Activado' : 'Desactivado'})`,
+    });
+
+    this.logger.log(`[ExchangeRateService] Cotización USD actualizada: $${config.usdRate} ARS | Redondeo: ${config.roundPrices}`);
+
+    return {
+      id: config.id,
+      usdRate: Number(config.usdRate),
+      roundPrices: Boolean(config.roundPrices),
+      updatedBy: config.updatedBy,
+      updatedAt: config.updatedAt,
+    };
+  }
+
+  /**
+   * Retorna la cotización activa del dólar.
+   */
+  async getUsdRate(): Promise<number> {
+    const config = await this.getConfig();
+    return Number(config.usdRate || this.defaultRate);
   }
 
   /**
    * Transforma un Plan para su visualización pública en la web,
-   * garantizando que el precio mensual esté SIEMPRE expresado en PESOS (ARS),
-   * aplicando la cotización y redondeado hacia arriba (Math.ceil).
+   * calculando el precio mensual en PESOS (ARS) según la cotización guardada
+   * y aplicando el redondeo configurable.
    */
   async formatPlanForPublicWeb(plan: Plan): Promise<PlanPublicWithExchangeRate> {
-    const usdRate = await this.getUsdRate();
+    const config = await this.getConfig();
+    const usdRate = Number(config.usdRate || this.defaultRate);
+    const roundPrices = Boolean(config.roundPrices);
     const rawPrice = Number(plan.priceMonthly || 0);
-    const planCurrency = (plan.currency || 'ARS') as 'ARS' | 'USD';
+    const planCurrency = (plan.currency || (rawPrice === 0 ? 'ARS' : 'USD')) as 'ARS' | 'USD';
 
     let finalPriceInPesos: number;
     if (planCurrency === 'USD') {
-      // Multiplica el precio en dólares por la cotización y redondea hacia arriba
-      finalPriceInPesos = Math.ceil(rawPrice * usdRate);
+      const converted = rawPrice * usdRate;
+      finalPriceInPesos = roundPrices ? Math.ceil(converted) : Number(converted.toFixed(2));
     } else {
-      // Si ya está en pesos, redondea hacia arriba el valor
-      finalPriceInPesos = Math.ceil(rawPrice);
+      finalPriceInPesos = roundPrices ? Math.ceil(rawPrice) : Number(rawPrice.toFixed(2));
     }
 
     return {
@@ -106,6 +198,7 @@ export class ExchangeRateService {
       originalPrice: rawPrice,
       originalCurrency: planCurrency,
       exchangeRate: usdRate,
+      roundPrices,
       isTrial: Boolean(plan.isTrial),
       trialDays: plan.trialDays ?? null,
       maxUsers: plan.maxUsers,
@@ -118,4 +211,3 @@ export class ExchangeRateService {
     };
   }
 }
-

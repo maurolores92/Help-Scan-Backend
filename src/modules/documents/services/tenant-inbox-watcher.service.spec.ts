@@ -3,18 +3,24 @@ import { getModelToken } from '@nestjs/sequelize';
 import { BadRequestException } from '@nestjs/common';
 import * as os from 'os';
 import * as path from 'path';
-import { existsSync, readdirSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { TenantInboxWatcherService } from './tenant-inbox-watcher.service';
 import { Company } from '../../companies/company.model';
 import { Document } from '../document.model';
+import { FtpDevice } from '../../ftp-devices/ftp-device.model';
 import { TenantQuotasService } from '../../plans/services/tenant-quotas.service';
 import { DocumentProcessingQueueService } from './document-processing-queue.service';
+import { DocumentUploadQueueService } from './document-upload-queue.service';
 import { AuditService } from '../../audit/audit.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import {
   ensureTenantDirectories,
   sanitizeTenantId,
 } from '../../../common/utils/storage-path.util';
+import {
+  decryptVaultBuffer,
+  isEncryptedVaultBuffer,
+} from '../../../common/utils/vault-crypto.util';
 
 describe('TenantInboxWatcherService & Multitenant Storage Isolation', () => {
   let service: TenantInboxWatcherService;
@@ -38,6 +44,7 @@ describe('TenantInboxWatcherService & Multitenant Storage Isolation', () => {
     tenantQuotasMock = {
       checkDocumentQuota: jest.fn().mockResolvedValue({ allowed: true }),
       notifyQuotaExceeded: jest.fn().mockResolvedValue(undefined),
+      recordPagesUploaded: jest.fn().mockResolvedValue(undefined),
     };
 
     processingQueueMock = {
@@ -49,8 +56,23 @@ describe('TenantInboxWatcherService & Multitenant Storage Isolation', () => {
         TenantInboxWatcherService,
         { provide: getModelToken(Company), useValue: { findAll: jest.fn().mockResolvedValue([]) } },
         { provide: getModelToken(Document), useValue: documentModelMock },
+        {
+          provide: getModelToken(FtpDevice),
+          useValue: {
+            findOne: jest.fn().mockResolvedValue(null),
+            increment: jest.fn().mockResolvedValue(undefined),
+            update: jest.fn().mockResolvedValue(undefined),
+          },
+        },
         { provide: TenantQuotasService, useValue: tenantQuotasMock },
         { provide: DocumentProcessingQueueService, useValue: processingQueueMock },
+        {
+          provide: DocumentUploadQueueService,
+          useValue: {
+            enqueue: jest.fn().mockImplementation((_meta, task) => task()),
+            getStatus: jest.fn().mockReturnValue({ isProcessing: false, waitingCount: 0 }),
+          },
+        },
         { provide: AuditService, useValue: { log: jest.fn().mockResolvedValue(undefined) } },
         {
           provide: NotificationsService,
@@ -123,6 +145,24 @@ describe('TenantInboxWatcherService & Multitenant Storage Isolation', () => {
     expect(summary.skippedByQuotaCount).toBe(1);
     const quarantinedFiles = readdirSync(quarantineDir);
     expect(quarantinedFiles.length).toBe(2);
+  });
+
+  it('cifra en reposo el PDF movido a vault y lo atribuye a la impresora HP según subcarpeta de inbox', async () => {
+    const { inboxDir, vaultDir } = ensureTenantDirectories(6);
+    const hpSubDir = path.join(inboxDir, 'hp-e52645-recepcion');
+    mkdirSync(hpSubDir, { recursive: true });
+    const rawPdf = Buffer.from('%PDF-1.6 Escaneo factura AFIP desde E52645');
+    writeFileSync(path.join(hpSubDir, 'scan_recepcion.pdf'), rawPdf);
+
+    const summary = await service.scanTenantInbox(6, 21);
+    expect(summary.imported).toBe(1);
+
+    const createdPayload = documentModelMock.create.mock.calls[0][0];
+    const vaultRelative = createdPayload.filePath.replace(/^tenancy\/company_6\/vault\//, '');
+    const encryptedDiskBytes = readFileSync(path.join(vaultDir, vaultRelative));
+
+    expect(isEncryptedVaultBuffer(encryptedDiskBytes)).toBe(true);
+    expect(decryptVaultBuffer(encryptedDiskBytes, 6).equals(rawPdf)).toBe(true);
   });
 });
 

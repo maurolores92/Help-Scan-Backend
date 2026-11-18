@@ -164,5 +164,113 @@ describe('DocumentAiExtractorService', () => {
     const requestPayload = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(requestPayload.contents[0].parts[0].inlineData.mimeType).toBe('application/pdf');
   });
+
+  it('debe enlistar artículos de factura ERP compacta (código, nombre, cantidad, precio sin IVA, precio final)', async () => {
+    delete process.env.GEMINI_API_KEY;
+    mockedPdfParse.mockResolvedValueOnce({
+      numpages: 1,
+      text: `
+        FACTURA 06/10/2026
+        Señores: CHAYEH NOS S.R.L.
+        Domicilio: RUTA 226 KM 60
+        30-70841005-1
+        800000001ALQUILEREQUIPO1.0039520.00039520.00
+        ACT:8-ANT:7
+        ID:7016
+        890000001EXCEDENTEPORCOPIA1.000.0000.00
+        Total: $ 47819.20
+      `,
+    });
+
+    const result = await service.extractFromBuffer(
+      Buffer.from('%PDF-1.4 test'),
+      'factura_chayeh.pdf',
+    );
+
+    expect(result.extractedData.items).toHaveLength(2);
+    expect(result.extractedData.items[0]).toEqual({
+      codigo: '800000001',
+      nombre: 'ALQUILER EQUIPO',
+      cantidad: 1,
+      precioSinIva: 39520,
+      precioFinal: 39520,
+    });
+    expect(result.extractedData.items[1]).toEqual({
+      codigo: '890000001',
+      nombre: 'EXCEDENTE POR COPIA',
+      cantidad: 1,
+      precioSinIva: 0,
+      precioFinal: 0,
+    });
+  });
+
+  it('debe enlistar artículos de presupuesto técnico con viñetas y cantidades (sin precios individuales)', async () => {
+    delete process.env.GEMINI_API_KEY;
+    mockedPdfParse.mockResolvedValueOnce({
+      numpages: 1,
+      text: `
+        SERVICIO TÉCNICO
+        Mar del Plata 20 de abril de 2022
+        Razón social: ACOSTA ALICIA
+         UNI FOTOCONDUCTORA MP 201-1515 (1)
+         ROD. FUS. SUPERIOR MP 171/201 (1)
+         UÑAS FUSOR MP 171/201 (3)
+         THERMISTOR MP 171/201/301 (1)
+         MANO DE OBRA (1)
+        Total: $ 36500 + IVA
+      `,
+    });
+
+    const result = await service.extractFromBuffer(
+      Buffer.from('%PDF-1.4 test'),
+      'presupuesto_acosta.pdf',
+    );
+
+    expect(result.extractedData.items).toHaveLength(5);
+    expect(result.extractedData.items[0].nombre).toBe('UNI FOTOCONDUCTORA MP 201-1515');
+    expect(result.extractedData.items[0].cantidad).toBe(1);
+    expect(result.extractedData.items[0].codigo).toBeNull();
+    expect(result.extractedData.items[2].nombre).toBe('UÑAS FUSOR MP 171/201');
+    expect(result.extractedData.items[2].cantidad).toBe(3);
+    expect(result.extractedData.items[4].nombre).toBe('MANO DE OBRA');
+  });
+
+  it('debe enlistar artículos de nota de pedido con códigos prefijados e IVA', async () => {
+    delete process.env.GEMINI_API_KEY;
+    mockedPdfParse.mockResolvedValueOnce({
+      numpages: 1,
+      text: `
+        NOTA DE PEDIDO
+        15 de junio de 2023
+        Razón social: Abete y CIA SA
+        HC 1 - M320F $ 235000 21 % $ 49350 $ 284350
+        BK 1 - TONER TIPO SP 3710X $ 17000
+        Total: $ 301350
+      `,
+    });
+
+    const result = await service.extractFromBuffer(
+      Buffer.from('%PDF-1.4 test'),
+      'nota_pedido_abete.pdf',
+    );
+
+    expect(result.extractedData.items).toHaveLength(2);
+    expect(result.extractedData.items[0]).toEqual({
+      codigo: 'HC 1',
+      nombre: 'M320F',
+      cantidad: 1,
+      precioSinIva: 235000,
+      precioFinal: 284350,
+      ivaPorcentaje: 21,
+    });
+    expect(result.extractedData.items[1]).toEqual({
+      codigo: 'BK 1',
+      nombre: 'TONER TIPO SP 3710X',
+      cantidad: 1,
+      precioSinIva: 17000,
+      precioFinal: 17000,
+      ivaPorcentaje: null,
+    });
+  });
 });
 

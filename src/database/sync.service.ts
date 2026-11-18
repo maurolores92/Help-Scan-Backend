@@ -19,7 +19,9 @@ export class SyncService implements OnModuleInit {
 
     const syncOrder = [
       'Plan',
+      'PlanExchangeConfig',
       'Company',
+      'FtpDevice',
       'CompanyMonthlyUsage',
       'Role',
       'Users',
@@ -74,17 +76,34 @@ export class SyncService implements OnModuleInit {
 
   private async ensurePlanSchemaColumns() {
     const statements = [
-      `ALTER TABLE "plans" ADD COLUMN IF NOT EXISTS "currency" VARCHAR(10) DEFAULT 'ARS';`,
+      `CREATE TABLE IF NOT EXISTS "plan_exchange_config" (
+        "id" SERIAL PRIMARY KEY,
+        "usd_rate" DECIMAL(10, 2) NOT NULL DEFAULT 1250.00,
+        "round_prices" BOOLEAN NOT NULL DEFAULT TRUE,
+        "updated_by" INTEGER,
+        "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        "updated_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+      );`,
+      `INSERT INTO "plan_exchange_config" ("id", "usd_rate", "round_prices", "updated_by", "created_at", "updated_at")
+       VALUES (1, 1250.00, TRUE, NULL, NOW(), NOW())
+       ON CONFLICT ("id") DO NOTHING;`,
+      `ALTER TABLE "plans" ADD COLUMN IF NOT EXISTS "currency" VARCHAR(10) DEFAULT 'USD';`,
+      `ALTER TABLE "plans" ALTER COLUMN "currency" SET DEFAULT 'USD';`,
       `ALTER TABLE "plans" ADD COLUMN IF NOT EXISTS "is_trial" BOOLEAN NOT NULL DEFAULT FALSE;`,
       `ALTER TABLE "plans" ADD COLUMN IF NOT EXISTS "trial_days" INTEGER DEFAULT NULL;`,
+      `ALTER TABLE "plans" ADD COLUMN IF NOT EXISTS "max_pages" INTEGER DEFAULT 1000;`,
+      `UPDATE "plans" SET "max_pages" = "max_documents" WHERE "max_pages" IS NULL AND "max_documents" IS NOT NULL;`,
       `ALTER TABLE "companies" ADD COLUMN IF NOT EXISTS "plan_id" INTEGER REFERENCES "plans"("id") ON DELETE SET NULL;`,
       `ALTER TABLE "companies" ADD COLUMN IF NOT EXISTS "is_trial" BOOLEAN NOT NULL DEFAULT FALSE;`,
       `ALTER TABLE "companies" ADD COLUMN IF NOT EXISTS "trial_ends_at" TIMESTAMP WITH TIME ZONE DEFAULT NULL;`,
       `ALTER TABLE "companies" ADD COLUMN IF NOT EXISTS "use_custom_limits" BOOLEAN NOT NULL DEFAULT FALSE;`,
+      `ALTER TABLE "companies" ADD COLUMN IF NOT EXISTS "max_pages" INTEGER DEFAULT NULL;`,
+      `ALTER TABLE "companies" ADD COLUMN IF NOT EXISTS "total_pages_uploaded" INTEGER NOT NULL DEFAULT 0;`,
       `ALTER TABLE "companies" ADD COLUMN IF NOT EXISTS "max_documents" INTEGER DEFAULT NULL;`,
       `ALTER TABLE "companies" ADD COLUMN IF NOT EXISTS "max_storage_mb" INTEGER DEFAULT NULL;`,
       `ALTER TABLE "companies" ADD COLUMN IF NOT EXISTS "max_ai_queries_monthly" INTEGER DEFAULT NULL;`,
       `ALTER TABLE "companies" ALTER COLUMN "max_users" DROP NOT NULL;`,
+      `ALTER TABLE "company_monthly_usages" ADD COLUMN IF NOT EXISTS "pages_count" INTEGER NOT NULL DEFAULT 0;`,
     ];
 
     for (const sql of statements) {
@@ -107,12 +126,33 @@ export class SyncService implements OnModuleInit {
       `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "currency" VARCHAR(10) DEFAULT NULL;`,
       `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "total_amount" DECIMAL(15, 2) DEFAULT NULL;`,
       `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "tags" JSONB DEFAULT '[]'::jsonb;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "items" JSONB DEFAULT '[]'::jsonb;`,
       `ALTER TABLE "documents" ALTER COLUMN "extracted_data" TYPE JSONB USING "extracted_data"::jsonb;`,
       `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "raw_text" TEXT DEFAULT NULL;`,
       `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "page_count" INTEGER DEFAULT NULL;`,
       `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "ai_confidence" REAL DEFAULT NULL;`,
       `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "extraction_engine" VARCHAR(40) DEFAULT NULL;`,
       `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "processed_at" TIMESTAMP WITH TIME ZONE DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "ftp_device_id" INTEGER DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "ftp_device_name" VARCHAR(120) DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "due_date" DATE DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "recipient_tax_id" VARCHAR(50) DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "recipient_phone" VARCHAR(50) DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "recipient_email" VARCHAR(100) DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "delivery_address" VARCHAR(255) DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "net_amount" DECIMAL(15, 2) DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "tax_amount" DECIMAL(15, 2) DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "payment_terms" VARCHAR(150) DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "payment_method" VARCHAR(60) DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "reference_number" VARCHAR(100) DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "cae" VARCHAR(30) DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "tax_condition" VARCHAR(60) DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "equipment_id" VARCHAR(50) DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "equipment_model" VARCHAR(100) DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "meter_count" VARCHAR(100) DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "validated_by_user_id" INTEGER DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "validated_at" TIMESTAMP WITH TIME ZONE DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "validation_notes" TEXT DEFAULT NULL;`,
     ];
 
     for (const sql of statements) {
@@ -138,6 +178,11 @@ export class SyncService implements OnModuleInit {
       { table: 'documents', name: 'idx_documents_company_id', column: 'company_id' },
       { table: 'documents', name: 'idx_documents_status', column: 'status' },
       { table: 'documents', name: 'idx_documents_file_hash', column: 'file_hash' },
+      { table: 'documents', name: 'idx_documents_equipment_id', column: 'equipment_id' },
+      { table: 'documents', name: 'idx_documents_recipient_tax_id', column: 'recipient_tax_id' },
+      { table: 'documents', name: 'idx_documents_due_date', column: 'due_date' },
+      { table: 'ftp_devices', name: 'idx_ftp_devices_company_id', column: 'company_id' },
+      { table: 'ftp_devices', name: 'idx_ftp_devices_status', column: 'status' },
     ];
 
     for (const idx of singleColumnIndexes) {
@@ -184,12 +229,12 @@ export class SyncService implements OnModuleInit {
     try {
       const companyModel = this.sequelize.models['Company'];
       if (!companyModel) return;
-      const companies = await companyModel.findAll({ attributes: ['id'], raw: true });
-      for (const comp of companies as unknown as Array<{ id: number }>) {
-        ensureTenantDirectories(comp.id);
+      const companies = await companyModel.findAll({ attributes: ['id', 'name', 'slug'], raw: true });
+      for (const comp of companies as unknown as Array<{ id: number; name?: string; slug?: string }>) {
+        ensureTenantDirectories(comp.id, comp.slug || comp.name);
       }
       this.logger.log(
-        `📁 Directorios storage/tenancy/company_<id>/{inbox,vault,quarantine} listos para ${companies.length} compañía(s).`,
+        `📁 Directorios storage/tenancy/company_<id>_<slug>/{inbox,vault,quarantine} listos para ${companies.length} compañía(s).`,
       );
     } catch (error: any) {
       this.logger.warn(`No se pudieron aprovisionar directorios de storage: ${error?.message}`);

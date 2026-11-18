@@ -16,6 +16,6 @@ export interface IAppConfig {
 export const DBConfig = (): IDbConfig => resolveDatabaseEnv();
 
 export const AppConfig = (): IAppConfig => ({
-  port: Number(process.env.PORT) || 5000,
+  port: Number(process.env.PORT) || 5002,
   openRouterApiKey: process.env.OPENROUTER_API_KEY || '',
 });

@@ -10,11 +10,13 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'fs';
 import { basename, extname, join } from 'path';
 import { Company } from '../../companies/company.model';
 import { Document, DocumentSource, DocumentStatus } from '../document.model';
+import { FtpDevice } from '../../ftp-devices/ftp-device.model';
 import { TenantQuotasService } from '../../plans/services/tenant-quotas.service';
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../audit/audit.model';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { DocumentProcessingQueueService } from './document-processing-queue.service';
+import { DocumentUploadQueueService } from './document-upload-queue.service';
 import {
   ensureTenantDirectories,
   getStorageRootPath,
@@ -25,6 +27,7 @@ import {
   moveInboxFileToQuarantine,
   moveInboxFileToVault,
 } from '../helpers/document-storage.helper';
+import pdfParse = require('pdf-parse');
 
 export interface InboxSyncSummary {
   syncedCount: number;
@@ -37,9 +40,14 @@ export interface InboxSyncSummary {
   newDocuments: Document[];
 }
 
+export interface FtpDeviceIngestContext {
+  id: number;
+  deviceName: string;
+}
+
 /**
  * Servicio Watcher en tiempo real (`chokidar`) que observa `storage/tenancy/company_<id>/inbox`
- * para detectar PDFs enviados por impresoras HP vía SFTP o copiados localmente en disco.
+ * (incluyendo subcarpetas por equipo HP) para detectar PDFs enviados por impresoras HP vía SFTP/FTPS/FTP.
  */
 @Injectable()
 export class TenantInboxWatcherService
@@ -53,8 +61,10 @@ export class TenantInboxWatcherService
   constructor(
     @InjectModel(Company) private readonly companyModel: typeof Company,
     @InjectModel(Document) private readonly documentModel: typeof Document,
+    @InjectModel(FtpDevice) private readonly ftpDeviceModel: typeof FtpDevice,
     private readonly tenantQuotasService: TenantQuotasService,
     private readonly processingQueue: DocumentProcessingQueueService,
+    private readonly uploadQueue: DocumentUploadQueueService,
     private readonly auditService: AuditService,
     private readonly notificationsService: NotificationsService,
   ) {}
@@ -79,7 +89,7 @@ export class TenantInboxWatcherService
       this.watcher = chokidar.watch(tenancyRoot, {
         persistent: true,
         ignoreInitial: false,
-        depth: 3,
+        depth: 5,
         awaitWriteFinish: {
           stabilityThreshold: 2500,
           pollInterval: 300,
@@ -143,14 +153,9 @@ export class TenantInboxWatcherService
 
     if (!existsSync(inboxDir)) return summary;
 
-    const entries = readdirSync(inboxDir);
-    for (const entry of entries) {
-      if (entry.startsWith('.') || /\.(part|tmp|crdownload)$/i.test(entry)) continue;
-      const fullPath = join(inboxDir, entry);
+    const files = this.collectInboxFiles(inboxDir);
+    for (const fullPath of files) {
       if (!existsSync(fullPath)) continue;
-
-      const stats = statSync(fullPath);
-      if (!stats.isFile()) continue;
 
       const outcome = await this.ingestSingleInboxFile(companyId, fullPath, actorUserId, false);
       if (outcome.status === 'imported' && outcome.document) {
@@ -178,17 +183,63 @@ export class TenantInboxWatcherService
     return summary;
   }
 
-  private extractCompanyIdFromPath(filePath: string): number | null {
+  private collectInboxFiles(dirPath: string, depth = 0): string[] {
+    if (depth > 4 || !existsSync(dirPath)) return [];
+    const results: string[] = [];
+
+    for (const entry of readdirSync(dirPath)) {
+      if (entry.startsWith('.') || /\.(part|tmp|crdownload)$/i.test(entry)) continue;
+      const fullPath = join(dirPath, entry);
+      if (!existsSync(fullPath)) continue;
+
+      const stats = statSync(fullPath);
+      if (stats.isDirectory()) {
+        results.push(...this.collectInboxFiles(fullPath, depth + 1));
+      } else if (stats.isFile()) {
+        results.push(fullPath);
+      }
+    }
+
+    return results;
+  }
+
+  private extractInboxLocationFromPath(
+    filePath: string,
+  ): { companyId: number; subFolder: string | null } | null {
     const normalized = filePath.replace(/\\/g, '/');
-    const match = normalized.match(/\/tenancy\/company_(\d+)\/inbox\/[^/]+$/);
-    return match ? Number(match[1]) : null;
+    const match = normalized.match(/\/tenancy\/company_(\d+)\/inbox\/(.+)$/);
+    if (!match) return null;
+
+    const companyId = Number(match[1]);
+    const relativeInsideInbox = match[2];
+    const parts = relativeInsideInbox.split('/').filter(Boolean);
+    const subFolder = parts.length > 1 ? parts[0] : null;
+    return { companyId, subFolder };
+  }
+
+  private async resolveDeviceForPath(
+    companyId: number,
+    fullPath: string,
+    explicitContext?: FtpDeviceIngestContext,
+  ): Promise<FtpDeviceIngestContext | null> {
+    if (explicitContext) return explicitContext;
+
+    const location = this.extractInboxLocationFromPath(fullPath);
+    if (!location?.subFolder) return null;
+
+    const device = await this.ftpDeviceModel.findOne({
+      where: { companyId, subFolder: location.subFolder },
+      attributes: ['id', 'deviceName'],
+    });
+
+    return device ? { id: device.id, deviceName: device.deviceName } : null;
   }
 
   private async handleDetectedFile(filePath: string): Promise<void> {
-    const companyId = this.extractCompanyIdFromPath(filePath);
-    if (!companyId) return;
+    const location = this.extractInboxLocationFromPath(filePath);
+    if (!location) return;
 
-    await this.ingestSingleInboxFile(companyId, filePath, undefined, true);
+    await this.ingestSingleInboxFile(location.companyId, filePath, undefined, true);
   }
 
   async ingestSingleInboxFile(
@@ -196,6 +247,7 @@ export class TenantInboxWatcherService
     fullPath: string,
     actorUserId?: number,
     notifyQuotaImmediately = true,
+    explicitDeviceContext?: FtpDeviceIngestContext,
   ): Promise<{
     status: 'imported' | 'duplicate' | 'invalid' | 'quota_exceeded' | 'skipped';
     document?: Document;
@@ -208,90 +260,165 @@ export class TenantInboxWatcherService
     this.processingPaths.add(fullPath);
     try {
       const originalName = basename(fullPath);
-      const ext = extname(originalName).toLowerCase();
-      const stats = statSync(fullPath);
 
-      if (ext !== '.pdf' || stats.size === 0) {
-        moveInboxFileToQuarantine(companyId, fullPath, 'invalid');
-        return { status: 'invalid', reason: 'Extensión no PDF o archivo vacío' };
-      }
-
-      const fileBuffer = readFileSync(fullPath);
-      if (!isValidPdfBufferHeader(fileBuffer)) {
-        moveInboxFileToQuarantine(companyId, fullPath, 'invalid');
-        return { status: 'invalid', reason: 'Cabecera binaria PDF inválida' };
-      }
-
-      const fileHash = computeBufferSha256(fileBuffer);
-      const duplicate = await this.documentModel.findOne({
-        where: { companyId, fileHash },
-        attributes: ['id', 'originalName'],
-      });
-
-      if (duplicate) {
-        moveInboxFileToQuarantine(companyId, fullPath, 'duplicate');
-        this.logger.warn(
-          `[Inbox company_${companyId}] PDF duplicado detectado ('${originalName}' == doc #${duplicate.id}); movido a quarantine.`,
-        );
-        return { status: 'duplicate' };
-      }
-
-      const quotaCheck = await this.tenantQuotasService.checkDocumentQuota(
-        companyId,
-        stats.size,
-      );
-      if (!quotaCheck.allowed) {
-        moveInboxFileToQuarantine(companyId, fullPath, 'quota');
-        if (notifyQuotaImmediately && quotaCheck.reason) {
-          await this.tenantQuotasService.notifyQuotaExceeded(companyId, quotaCheck.reason);
-        }
-        return { status: 'quota_exceeded', reason: quotaCheck.reason };
-      }
-
-      const moved = moveInboxFileToVault(companyId, fullPath, originalName);
-      const doc = await this.documentModel.create({
-        companyId,
-        userId: actorUserId ?? null,
-        originalName,
-        fileName: moved.physicalFileName,
-        filePath: moved.relativePath,
-        fileSize: moved.fileSize,
-        mimeType: 'application/pdf',
-        source: DocumentSource.FTP,
-        status: DocumentStatus.PENDING,
-        fileHash: moved.fileHash,
-      } as never);
-
-      await this.auditService.log({
-        action: AuditAction.UPLOAD,
-        entity: 'Document',
-        entityId: doc.id,
-        companyId,
-        userId: actorUserId,
-        payload: {
-          documentId: doc.id,
-          originalName,
-          filePath: moved.relativePath,
-          size: moved.fileSize,
-          source: DocumentSource.FTP,
+      // Serializar la ingesta de escaneos FTP en la cola secuencial 1 a 1
+      return await this.uploadQueue.enqueue(
+        {
+          companyId,
+          userId: actorUserId,
+          fileName: originalName,
+          source: 'ftp',
         },
-        description: `PDF detectado automáticamente en inbox y almacenado en bóveda: '${originalName}'`,
-      });
+        async () => {
+          if (!existsSync(fullPath)) {
+            return { status: 'skipped' as const };
+          }
+          const ext = extname(originalName).toLowerCase();
+          const stats = statSync(fullPath);
+          const deviceCtx = await this.resolveDeviceForPath(
+            companyId,
+            fullPath,
+            explicitDeviceContext,
+          );
 
-      await this.notificationsService.dispatch({
-        type: 'document.uploaded',
-        title: '📥 Nuevo PDF detectado en carpeta / SFTP',
-        body: `Se recibió '${originalName}' y comenzó su extracción inteligente con IA`,
-        companyId,
-        actorUser: actorUserId ? { id: actorUserId } : null,
-        extraData: { documentId: doc.id, link: '/documents' },
-      });
+          if (ext !== '.pdf' || stats.size === 0) {
+            moveInboxFileToQuarantine(companyId, fullPath, 'invalid');
+            await this.notifyRejectedFile(companyId, originalName, 'Extensión no PDF o archivo vacío', deviceCtx);
+            return { status: 'invalid' as const, reason: 'Extensión no PDF o archivo vacío' };
+          }
 
-      this.processingQueue.enqueue(doc.id, actorUserId ?? null);
+          const fileBuffer = readFileSync(fullPath);
+          if (!isValidPdfBufferHeader(fileBuffer)) {
+            moveInboxFileToQuarantine(companyId, fullPath, 'invalid');
+            await this.notifyRejectedFile(companyId, originalName, 'Cabecera binaria PDF inválida', deviceCtx);
+            return { status: 'invalid' as const, reason: 'Cabecera binaria PDF inválida' };
+          }
 
-      return { status: 'imported', document: doc };
+          const fileHash = computeBufferSha256(fileBuffer);
+          const duplicate = await this.documentModel.findOne({
+            where: { companyId, fileHash },
+            attributes: ['id', 'originalName'],
+          });
+
+          if (duplicate) {
+            moveInboxFileToQuarantine(companyId, fullPath, 'duplicate');
+            this.logger.warn(
+              `[Inbox company_${companyId}] PDF duplicado detectado ('${originalName}' == doc #${duplicate.id}); movido a quarantine.`,
+            );
+            return { status: 'duplicate' as const };
+          }
+
+          let pageCount = 1;
+          try {
+            const parsed = await pdfParse(fileBuffer);
+            pageCount = Math.max(1, Number(parsed?.numpages || 1));
+          } catch {
+            pageCount = 1;
+          }
+
+          const quotaCheck = await this.tenantQuotasService.checkDocumentQuota(
+            companyId,
+            stats.size,
+            pageCount,
+          );
+          if (!quotaCheck.allowed) {
+            moveInboxFileToQuarantine(companyId, fullPath, 'quota');
+            if (notifyQuotaImmediately && quotaCheck.reason) {
+              await this.tenantQuotasService.notifyQuotaExceeded(companyId, quotaCheck.reason);
+            }
+            return { status: 'quota_exceeded' as const, reason: quotaCheck.reason };
+          }
+
+          const moved = moveInboxFileToVault(companyId, fullPath, originalName);
+          const doc = await this.documentModel.create({
+            companyId,
+            userId: actorUserId ?? null,
+            originalName,
+            fileName: moved.physicalFileName,
+            filePath: moved.relativePath,
+            fileSize: moved.fileSize,
+            mimeType: 'application/pdf',
+            pageCount,
+            source: DocumentSource.FTP,
+            status: DocumentStatus.PENDING,
+            fileHash: moved.fileHash,
+            ftpDeviceId: deviceCtx?.id ?? null,
+            ftpDeviceName: deviceCtx?.deviceName ?? null,
+          } as never);
+
+          // Odómetro acumulativo estricto: suma hojas y jamás disminuye al borrar
+          await this.tenantQuotasService.recordPagesUploaded(companyId, pageCount);
+
+          if (deviceCtx) {
+            await this.ftpDeviceModel.increment(
+              { scannedCount: 1 },
+              { where: { id: deviceCtx.id, companyId } },
+            );
+            await this.ftpDeviceModel.update(
+              { lastFileAt: new Date() },
+              { where: { id: deviceCtx.id, companyId } },
+            );
+          }
+
+          await this.auditService.log({
+            action: AuditAction.UPLOAD,
+            entity: 'Document',
+            entityId: doc.id,
+            companyId,
+            userId: actorUserId,
+            payload: {
+              documentId: doc.id,
+              originalName,
+              filePath: moved.relativePath,
+              size: moved.fileSize,
+              source: DocumentSource.FTP,
+              ftpDeviceId: deviceCtx?.id ?? null,
+              ftpDeviceName: deviceCtx?.deviceName ?? null,
+            },
+            description: deviceCtx
+              ? `PDF recibido desde '${deviceCtx.deviceName}' y cifrado en bóveda: '${originalName}'`
+              : `PDF detectado automáticamente en inbox y cifrado en bóveda: '${originalName}'`,
+          });
+
+          await this.notificationsService.dispatch({
+            type: 'document.uploaded',
+            title: deviceCtx
+              ? `🖨️ Nuevo escaneo de ${deviceCtx.deviceName}`
+              : '📥 Nuevo PDF detectado en carpeta / SFTP',
+            body: `Se recibió '${originalName}' y comenzó su extracción automática OCR`,
+            companyId,
+            actorUser: actorUserId ? { id: actorUserId } : null,
+            extraData: { documentId: doc.id, ftpDeviceId: deviceCtx?.id, link: '/documents' },
+          });
+
+          this.processingQueue.enqueue(doc.id, actorUserId ?? null);
+
+          return { status: 'imported' as const, document: doc };
+        },
+      );
     } finally {
       this.processingPaths.delete(fullPath);
+    }
+  }
+
+  private async notifyRejectedFile(
+    companyId: number,
+    originalName: string,
+    reason: string,
+    deviceCtx: FtpDeviceIngestContext | null,
+  ): Promise<void> {
+    try {
+      await this.notificationsService.dispatch({
+        type: 'ftp_device.file_rejected',
+        title: '🚫 Archivo FTP rechazado',
+        body: deviceCtx
+          ? `'${originalName}' enviado por '${deviceCtx.deviceName}' fue movido a cuarentena (${reason}).`
+          : `'${originalName}' recibido en bandeja FTP fue movido a cuarentena (${reason}).`,
+        companyId,
+        extraData: { ftpDeviceId: deviceCtx?.id, link: '/printers-ftp' },
+      });
+    } catch (err: any) {
+      this.logger.warn(`No se pudo emitir notificación ftp_device.file_rejected: ${err?.message}`);
     }
   }
 }

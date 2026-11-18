@@ -18,6 +18,7 @@ import { UploadsModule } from './uploads/uploads.module';
 import { CompaniesModule } from './companies/companies.module';
 import { PlansModule } from './plans/plans.module';
 import { DocumentsModule } from './documents/documents.module';
+import { FtpDevicesModule } from './ftp-devices/ftp-devices.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { DocumentsModule } from './documents/documents.module';
     CompaniesModule,
     UsersModule,
     DocumentsModule,
+    FtpDevicesModule,
     AuthModule,
     SeedModule,
     UploadsModule,

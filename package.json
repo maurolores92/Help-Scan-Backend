@@ -6,6 +6,10 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
+    "preinstall": "node scripts/ensure-pnpm.js",
+    "prebuild": "node scripts/ensure-pnpm.js",
+    "prestart": "node scripts/ensure-pnpm.js",
+    "pretest": "node scripts/ensure-pnpm.js",
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",

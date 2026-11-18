@@ -96,33 +96,36 @@ export class UsersAuthProfileService {
     if (actorUser) {
       const isSelf = Number(actorUser.id) === Number(userId);
       if (!isSelf) {
-        if (isPlatformSuperAdmin(actorUser)) {
-          throw new ForbiddenException(
-            'El Super Administrador no modifica contraseñas de usuarios de compañías.',
-          );
-        }
-
-        const canUpdateUser =
-          actorUser.isAdmin === true ||
-          actorUser.role === 'company_admin' ||
-          (Array.isArray(actorUser.permissions) &&
-            actorUser.permissions.includes('UPDATE_USER'));
-
-        if (!canUpdateUser) {
-          throw new ForbiddenException(
-            'No posees permisos para cambiar la contraseña de otro usuario.',
-          );
-        }
-
-        const tenantCompanyId = requireTenantCompanyId(actorUser);
+        const actorIsSuperAdmin = isPlatformSuperAdmin(actorUser);
         const isTargetSuperAdmin =
           String(user.username || '').toLowerCase() === 'superadmin' ||
           user.role?.slug === 'superadmin';
 
-        if (isTargetSuperAdmin || user.companyId !== tenantCompanyId) {
-          throw new ForbiddenException(
-            'No tienes permiso para cambiar la contraseña de un usuario de otra compañía.',
-          );
+        if (actorIsSuperAdmin) {
+          if (isTargetSuperAdmin || !user.companyId) {
+            throw new ForbiddenException(
+              'No tienes permiso para cambiar la contraseña de este usuario.',
+            );
+          }
+        } else {
+          const canUpdateUser =
+            actorUser.isAdmin === true ||
+            actorUser.role === 'company_admin' ||
+            (Array.isArray(actorUser.permissions) &&
+              actorUser.permissions.includes('UPDATE_USER'));
+
+          if (!canUpdateUser) {
+            throw new ForbiddenException(
+              'No posees permisos para cambiar la contraseña de otro usuario.',
+            );
+          }
+
+          const tenantCompanyId = requireTenantCompanyId(actorUser);
+          if (isTargetSuperAdmin || user.companyId !== tenantCompanyId) {
+            throw new ForbiddenException(
+              'No tienes permiso para cambiar la contraseña de un usuario de otra compañía.',
+            );
+          }
         }
       }
     }

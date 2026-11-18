@@ -15,9 +15,11 @@ import { AuthGuard } from '@nestjs/passport';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { PlansService } from './plans.service';
 import { TenantQuotasService } from './services/tenant-quotas.service';
+import { ExchangeRateService } from './services/exchange-rate.service';
 import { CreatePlanDto } from './dto/create-plan.dto';
 import { UpdatePlanDto } from './dto/update-plan.dto';
 import { QueryPlanDto } from './dto/query-plan.dto';
+import { UpdateExchangeConfigDto } from './dto/update-exchange-config.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Public } from '../auth/decorators/public.decorator';
 import {
@@ -28,6 +30,7 @@ import {
 /**
  * Controlador de Planes de Suscripción y consulta de cuota activa.
  * Incluye catálogo público sin autenticación en `GET /plans/public` para la landing page web.
+ * Permite consultar y configurar la tasa de cambio USD y política de redondeo.
  */
 @Controller('plans')
 @UseGuards(JwtAuthGuard)
@@ -35,12 +38,28 @@ export class PlansController {
   constructor(
     private readonly plansService: PlansService,
     private readonly tenantQuotasService: TenantQuotasService,
+    private readonly exchangeRateService: ExchangeRateService,
   ) {}
 
   @Public()
   @Get('public')
   getPublicCatalog() {
     return this.plansService.findAllPublic();
+  }
+
+  @Public()
+  @Get('exchange-rate')
+  getExchangeRate() {
+    return this.exchangeRateService.getConfig();
+  }
+
+  @Patch('exchange-rate')
+  updateExchangeRate(
+    @Body() dto: UpdateExchangeConfigDto,
+    @GetUser() user: any,
+  ) {
+    assertPlatformSuperAdmin(user);
+    return this.exchangeRateService.updateConfig(dto, user.id);
   }
 
   @Get('my-quota')

@@ -57,7 +57,7 @@ export class Plan extends Model {
   @Column({
     type: DataType.STRING(10),
     allowNull: false,
-    defaultValue: 'ARS',
+    defaultValue: 'USD',
     field: 'currency',
   })
   declare currency: 'ARS' | 'USD';
@@ -90,7 +90,18 @@ export class Plan extends Model {
   declare maxUsers: number | null;
 
   /**
-   * Límite máximo de documentos PDF almacenados (`null` = ilimitado).
+   * Límite máximo de páginas / hojas escaneadas o subidas (`null` = ilimitado).
+   */
+  @Column({
+    type: DataType.INTEGER,
+    allowNull: true,
+    defaultValue: 1000,
+    field: 'max_pages',
+  })
+  declare maxPages: number | null;
+
+  /**
+   * Límite de documentos PDF para retrocompatibilidad (`null` = ilimitado).
    */
   @Column({
     type: DataType.INTEGER,

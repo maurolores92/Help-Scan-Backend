@@ -7,6 +7,8 @@ import { CompanyTrialService } from './services/company-trial.service';
 import { AuditModule } from '../audit/audit.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PlansModule } from '../plans/plans.module';
+import { UsersModule } from '../users/users.module';
+import { FtpDevicesModule } from '../ftp-devices/ftp-devices.module';
 
 @Module({
   imports: [
@@ -14,6 +16,8 @@ import { PlansModule } from '../plans/plans.module';
     AuditModule,
     NotificationsModule,
     PlansModule,
+    UsersModule,
+    FtpDevicesModule,
   ],
   controllers: [CompaniesController],
   providers: [CompaniesService, CompanyTrialService],

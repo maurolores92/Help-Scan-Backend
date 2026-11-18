@@ -193,19 +193,26 @@ export class UsersLifecycleService {
       const isTargetSuperAdmin = user.username?.toLowerCase() === 'superadmin';
 
       if (actorIsSuperAdmin && !isSelfEdit) {
-        throw new ForbiddenException(
-          'El Super Administrador no modifica usuarios internos de compañías.',
-        );
+        if (isTargetSuperAdmin || !user.companyId) {
+          throw new ForbiddenException(
+            'El Super Administrador no puede modificar este usuario.',
+          );
+        }
+        if (updateData.companyId && Number(updateData.companyId) !== Number(user.companyId)) {
+          throw new ForbiddenException(
+            'El usuario no pertenece a la compañía especificada.',
+          );
+        }
       }
 
-      const canManageCompanyUsers =
-        !actorIsSuperAdmin &&
-        Boolean(
-          actorUser?.isAdmin === true ||
-            actorUser?.role === 'company_admin' ||
-            (Array.isArray(actorUser?.permissions) &&
-              actorUser?.permissions.includes('UPDATE_USER')),
-        );
+      const canManageCompanyUsers = Boolean(
+        (actorIsSuperAdmin && user.companyId && !isTargetSuperAdmin) ||
+          (!actorIsSuperAdmin &&
+            (actorUser?.isAdmin === true ||
+              actorUser?.role === 'company_admin' ||
+              (Array.isArray(actorUser?.permissions) &&
+                actorUser?.permissions.includes('UPDATE_USER')))),
+      );
 
       if (!isSelfEdit && !canManageCompanyUsers) {
         throw new ForbiddenException('No posees permisos para modificar otros usuarios.');

@@ -65,6 +65,13 @@ export class CreatePlanDto {
   @IsOptional()
   @ValidateIf((_, value) => value !== null)
   @Type(() => Number)
+  @IsInt({ message: 'El límite de hojas/páginas debe ser un número entero' })
+  @Min(1, { message: 'El límite de hojas debe ser al menos 1 o null (ilimitado)' })
+  maxPages?: number | null;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @Type(() => Number)
   @IsInt({ message: 'El límite de documentos debe ser un número entero' })
   @Min(1, { message: 'El límite de documentos debe ser al menos 1 o null (ilimitado)' })
   maxDocuments?: number | null;

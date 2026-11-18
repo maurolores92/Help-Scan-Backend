@@ -14,6 +14,7 @@ import * as fs from 'fs';
 import { Auth } from '../auth/decorators/auth.decorator';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { getUploadsRootPath } from '../../common/utils/upload-path.util';
+import { getTenantImagesPath } from '../../common/utils/storage-path.util';
 import { isPlatformSuperAdmin } from '../../common/utils/tenant-scope.util';
 
 const ALLOWED_FOLDERS = ['users', 'companies'];
@@ -45,12 +46,20 @@ export class UploadsController {
             );
           }
 
-          const uploadPath = join(getUploadsRootPath(), folder);
-          if (!fs.existsSync(uploadPath)) {
-            fs.mkdirSync(uploadPath, { recursive: true });
+          const user = (req as any).user;
+          const companyId = user?.companyId ? Number(user.companyId) : null;
+          let targetDir: string;
+          if (companyId && companyId > 0) {
+            targetDir = getTenantImagesPath(companyId, folder);
+          } else {
+            targetDir = join(getUploadsRootPath(), folder);
           }
 
-          cb(null, uploadPath);
+          if (!fs.existsSync(targetDir)) {
+            fs.mkdirSync(targetDir, { recursive: true });
+          }
+
+          cb(null, targetDir);
         },
         filename: (_req, file, cb) => {
           const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
@@ -89,13 +98,27 @@ export class UploadsController {
       throw new BadRequestException('El archivo es requerido');
     }
 
+    const userCompanyId = user?.companyId ? Number(user.companyId) : null;
+    if (userCompanyId && userCompanyId > 0) {
+      try {
+        const publicFallback = join(getUploadsRootPath(), folder, file.filename);
+        const sourcePath = file.path;
+        if (sourcePath && fs.existsSync(sourcePath) && !fs.existsSync(publicFallback)) {
+          fs.copyFileSync(sourcePath, publicFallback);
+        }
+      } catch {}
+    }
+
     return {
       message: 'Archivo subido correctamente',
       fileName: file.filename,
       originalName: file.originalname,
       mimeType: file.mimetype,
       size: file.size,
-      path: `/api/images/${folder}/${file.filename}`,
+      path:
+        userCompanyId && userCompanyId > 0
+          ? `/api/images/tenancy/company_${userCompanyId}/images/${folder}/${file.filename}`
+          : `/api/images/${folder}/${file.filename}`,
     };
   }
 }

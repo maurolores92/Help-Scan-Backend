@@ -28,6 +28,26 @@ export class QueryDocumentDto {
   dateTo?: string;
 
   @IsOptional()
+  @IsString()
+  equipmentId?: string;
+
+  @IsOptional()
+  @IsString()
+  equipmentModel?: string;
+
+  @IsOptional()
+  @IsString()
+  recipientTaxId?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  minAmount?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  maxAmount?: number;
+
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)

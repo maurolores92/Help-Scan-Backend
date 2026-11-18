@@ -100,7 +100,8 @@ export const buildCompanyCreationAttributes = (
     maxUsers: useCustom
       ? (dto.maxUsers !== undefined ? dto.maxUsers : (assignedPlan?.maxUsers ?? 10))
       : (dto.maxUsers ?? assignedPlan?.maxUsers ?? 10),
-    maxDocuments: useCustom ? (dto.maxDocuments ?? null) : null,
+    maxPages: useCustom ? (dto.maxPages ?? dto.maxDocuments ?? null) : null,
+    maxDocuments: useCustom ? (dto.maxDocuments ?? dto.maxPages ?? null) : null,
     maxStorageMb: useCustom ? (dto.maxStorageMb ?? null) : null,
     maxAiQueriesMonthly: useCustom ? (dto.maxAiQueriesMonthly ?? null) : null,
     enabledModules:

@@ -3,7 +3,9 @@ import { getModelToken } from '@nestjs/sequelize';
 import { BadRequestException } from '@nestjs/common';
 import { Sequelize } from 'sequelize-typescript';
 import { CompaniesService } from './companies.service';
-import { Company } from './company.model';
+import { Company, CompanyStatus } from './company.model';
+import { Users, UserStatus } from '../users/users.model';
+import { Role } from '../role/role.model';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PlansService } from '../plans/plans.service';
@@ -125,5 +127,71 @@ describe('CompaniesService', () => {
     expect(result.data[0].activeUsersCount).toBe(3);
     expect(result.data[0].quotaSummary.documents.current).toBe(10);
     expect(result.meta.totalItems).toBe(1);
+  });
+
+  it('debe activar la compañía, reactivar sus usuarios y garantizar la activación de su usuario administrador', async () => {
+    const mockCompany = {
+      id: 5,
+      name: 'Empresa Inactiva',
+      slug: 'empresa-inactiva',
+      status: CompanyStatus.INACTIVE,
+      isTrial: true,
+      trialEndsAt: new Date(Date.now() - 10000),
+      update: jest.fn().mockResolvedValue(undefined),
+      toJSON: () => ({ id: 5, name: 'Empresa Inactiva', status: CompanyStatus.ACTIVE }),
+    };
+
+    companyModelMock.findByPk.mockResolvedValue(mockCompany);
+
+    jest.spyOn(Users, 'update').mockResolvedValue([1] as any);
+    jest.spyOn(Role, 'findOne').mockResolvedValue({ id: 3, slug: 'company_admin' } as any);
+
+    const result = await service.changeStatus(5, CompanyStatus.ACTIVE, 1);
+
+    expect(mockCompany.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: CompanyStatus.ACTIVE,
+        isTrial: false,
+        trialEndsAt: null,
+      }),
+      expect.anything(),
+    );
+    expect(Users.update).toHaveBeenCalledWith(
+      { status: UserStatus.ACTIVE },
+      expect.objectContaining({ where: { companyId: 5 } }),
+    );
+    expect(auditServiceMock.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        description: expect.stringContaining('Se activó la compañía'),
+      }),
+    );
+    expect(result).toBeDefined();
+  });
+
+  it('debe suspender la compañía y desactivar sus usuarios asociados', async () => {
+    const mockCompany = {
+      id: 8,
+      name: 'Empresa Activa',
+      slug: 'empresa-activa',
+      status: CompanyStatus.ACTIVE,
+      update: jest.fn().mockResolvedValue(undefined),
+      toJSON: () => ({ id: 8, name: 'Empresa Activa', status: CompanyStatus.SUSPENDED }),
+    };
+
+    companyModelMock.findByPk.mockResolvedValue(mockCompany);
+    jest.spyOn(Users, 'update').mockResolvedValue([1] as any);
+
+    await service.changeStatus(8, CompanyStatus.SUSPENDED, 1);
+
+    expect(mockCompany.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: CompanyStatus.SUSPENDED,
+      }),
+      expect.anything(),
+    );
+    expect(Users.update).toHaveBeenCalledWith(
+      { status: UserStatus.INACTIVE },
+      expect.objectContaining({ where: { companyId: 8 } }),
+    );
   });
 });

@@ -7,15 +7,18 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { CompaniesService } from './companies.service';
+import { UsersService } from '../users/users.service';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { QueryCompanyDto } from './dto/query-company.dto';
+import { CreateUserDto } from '../users/dto/create-user.dto';
 import { CompanyStatus } from './company.model';
 import { assertPlatformSuperAdmin } from '../../common/utils/tenant-scope.util';
 
@@ -26,7 +29,10 @@ import { assertPlatformSuperAdmin } from '../../common/utils/tenant-scope.util';
 @Controller('companies')
 @UseGuards(AuthGuard('jwt'))
 export class CompaniesController {
-  constructor(private readonly companiesService: CompaniesService) {}
+  constructor(
+    private readonly companiesService: CompaniesService,
+    private readonly usersService: UsersService,
+  ) {}
 
   @Post()
   create(
@@ -58,14 +64,23 @@ export class CompaniesController {
     return this.companiesService.findById(id);
   }
 
-  @Patch(':id')
-  update(
+  @Get(':id/users')
+  getCompanyUsers(
     @Param('id', ParseIntPipe) id: number,
-    @Body() updateCompanyDto: UpdateCompanyDto,
     @GetUser() user: any,
   ) {
     assertPlatformSuperAdmin(user);
-    return this.companiesService.update(id, updateCompanyDto, user.id);
+    return this.usersService.findAll(id);
+  }
+
+  @Post(':id/users')
+  createCompanyUser(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: CreateUserDto,
+    @GetUser() user: any,
+  ) {
+    assertPlatformSuperAdmin(user);
+    return this.usersService.create(dto, user.id, id);
   }
 
   @Patch(':id/status')
@@ -76,6 +91,36 @@ export class CompaniesController {
   ) {
     assertPlatformSuperAdmin(user);
     return this.companiesService.changeStatus(id, status, user.id);
+  }
+
+  @Put(':id/status')
+  changeStatusPut(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('status') status: CompanyStatus,
+    @GetUser() user: any,
+  ) {
+    assertPlatformSuperAdmin(user);
+    return this.companiesService.changeStatus(id, status, user.id);
+  }
+
+  @Patch(':id')
+  update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateCompanyDto: UpdateCompanyDto,
+    @GetUser() user: any,
+  ) {
+    assertPlatformSuperAdmin(user);
+    return this.companiesService.update(id, updateCompanyDto, user.id);
+  }
+
+  @Put(':id')
+  updatePut(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateCompanyDto: UpdateCompanyDto,
+    @GetUser() user: any,
+  ) {
+    assertPlatformSuperAdmin(user);
+    return this.companiesService.update(id, updateCompanyDto, user.id);
   }
 
   @Delete(':id')

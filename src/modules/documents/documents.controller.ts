@@ -2,12 +2,14 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
+  Body,
   Delete,
   Param,
-  Body,
   Query,
   UseInterceptors,
   UploadedFile,
+  UploadedFiles,
   UseGuards,
   ParseIntPipe,
   Res,
@@ -15,19 +17,17 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { DocumentsService } from './documents.service';
-import { DocumentAiChatService } from './services/document-ai-chat.service';
 import { QueryDocumentDto } from './dto/query-document.dto';
-import { ChatDocumentDto } from './dto/chat-document.dto';
+import { ValidateDocumentDto } from './dto/validate-document.dto';
+import { RejectDocumentDto } from './dto/reject-document.dto';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequirePermission } from '../auth/decorators/require-permission.decorator';
 import { RequireTenantModule } from '../../common/decorators/require-tenant-module.decorator';
 import { TenantModuleGuard } from '../../common/guards/tenant-module.guard';
-import { RequireAiQuota } from '../plans/decorators/require-ai-quota.decorator';
-import { AiQuotaGuard } from '../plans/guards/ai-quota.guard';
 import {
   isPlatformSuperAdmin,
   requireTenantCompanyId,
@@ -35,17 +35,14 @@ import {
 
 /**
  * @controller DocumentsController
- * Ingesta web, sincronización SFTP/local, búsqueda universal,
- * reprocesamiento OCR/IA y Chat Conversacional Inteligente sobre documentos.
+ * Ingesta manual desde el portal, recepción automática vía FTP/SFTP,
+ * búsqueda universal de comprobantes, visor de PDF y extracción de datos mediante OCR.
  */
 @Controller('documents')
-@UseGuards(AuthGuard('jwt'), PermissionsGuard, TenantModuleGuard, AiQuotaGuard)
+@UseGuards(AuthGuard('jwt'), PermissionsGuard, TenantModuleGuard)
 @RequireTenantModule('documents')
 export class DocumentsController {
-  constructor(
-    private readonly documentsService: DocumentsService,
-    private readonly documentAiChatService: DocumentAiChatService,
-  ) {}
+  constructor(private readonly documentsService: DocumentsService) {}
 
   private assertTenantCompany(user: any): number {
     if (isPlatformSuperAdmin(user)) {
@@ -74,6 +71,27 @@ export class DocumentsController {
     return this.documentsService.uploadFromApp(file, { ...user, companyId: tenantCompanyId });
   }
 
+  @Post('upload-multiple')
+  @RequirePermission('UPLOAD_DOCUMENT')
+  @UseInterceptors(
+    FilesInterceptor('files', 50, {
+      limits: { fileSize: 25 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        if (!file.originalname.toLowerCase().endsWith('.pdf')) {
+          return cb(new BadRequestException(`El archivo '${file.originalname}' no es un PDF`), false);
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  uploadMultipleFiles(
+    @UploadedFiles() files: Express.Multer.File[],
+    @GetUser() user: any,
+  ) {
+    const tenantCompanyId = this.assertTenantCompany(user);
+    return this.documentsService.uploadMultipleFromApp(files, { ...user, companyId: tenantCompanyId });
+  }
+
   @Post('sync-ftp')
   @RequirePermission('UPLOAD_DOCUMENT')
   syncFtp(@GetUser() user: any) {
@@ -81,19 +99,10 @@ export class DocumentsController {
     return this.documentsService.scanFtpFolder(tenantCompanyId, user.id);
   }
 
-  @Post('chat')
-  @RequirePermission('QUERY_AI_DOCUMENTS')
-  @RequireAiQuota()
-  chatWithDocuments(@Body() dto: ChatDocumentDto, @GetUser() user: any) {
-    this.assertTenantCompany(user);
-    return this.documentAiChatService.chat(dto, user);
-  }
-
-  @Get('chat/context-documents')
-  @RequirePermission('QUERY_AI_DOCUMENTS')
-  getChatContextDocuments(@GetUser() user: any) {
-    this.assertTenantCompany(user);
-    return this.documentAiChatService.getRecentDocumentsForChat(user);
+  @Get('queue-status')
+  @RequirePermission('VIEW_DOCUMENTS')
+  getQueueStatus() {
+    return this.documentsService.getUploadQueueStatus();
   }
 
   @Get('facets')
@@ -124,16 +133,38 @@ export class DocumentsController {
     return this.documentsService.reprocessDocument(id, tenantCompanyId, user.id);
   }
 
+  @Patch(':id/validate')
+  @RequirePermission('UPLOAD_DOCUMENT')
+  validate(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ValidateDocumentDto,
+    @GetUser() user: any,
+  ) {
+    const tenantCompanyId = this.assertTenantCompany(user);
+    return this.documentsService.validateDocument(id, tenantCompanyId, user.id, dto);
+  }
+
+  @Patch(':id/reject')
+  @RequirePermission('UPLOAD_DOCUMENT')
+  reject(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: RejectDocumentDto,
+    @GetUser() user: any,
+  ) {
+    const tenantCompanyId = this.assertTenantCompany(user);
+    return this.documentsService.rejectDocument(id, tenantCompanyId, user.id, dto);
+  }
+
   @Get(':id/file')
   @RequirePermission('VIEW_DOCUMENTS')
   async getFile(@Param('id', ParseIntPipe) id: number, @GetUser() user: any, @Res() res: Response) {
     const tenantCompanyId = this.assertTenantCompany(user);
-    const { stream, document } = await this.documentsService.getFileStream(id, tenantCompanyId);
+    const { stream, plainSize, document } = await this.documentsService.getFileStream(id, tenantCompanyId);
 
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `inline; filename="${encodeURIComponent(document.originalName)}"`,
-      'Content-Length': document.fileSize,
+      'Content-Length': String(plainSize ?? document.fileSize),
     });
 
     stream.pipe(res);

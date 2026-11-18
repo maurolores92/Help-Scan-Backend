@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { SequelizeModule } from '@nestjs/sequelize';
 import { Plan } from './plan.model';
 import { CompanyMonthlyUsage } from './models/company-monthly-usage.model';
+import { PlanExchangeConfig } from './models/plan-exchange-config.model';
 import { Company } from '../companies/company.model';
 import { Users } from '../users/users.model';
 import { Document } from '../documents/document.model';
@@ -18,6 +19,7 @@ import { PlansController } from './plans.controller';
   imports: [
     SequelizeModule.forFeature([
       Plan,
+      PlanExchangeConfig,
       CompanyMonthlyUsage,
       Company,
       Users,

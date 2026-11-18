@@ -14,7 +14,8 @@ interface QueuedDocumentJob {
   actorUserId?: number | null;
 }
 
-const MAX_CONCURRENT_EXTRACTIONS = 2;
+// Extracción y análisis OCR/IA estrictamente de 1 en 1 para proteger CPU y RAM
+const MAX_CONCURRENT_EXTRACTIONS = 1;
 
 /**
  * Cola asíncrona controlada para procesar la extracción OCR/IA de PDFs
@@ -107,21 +108,43 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
       const extraction = await this.extractorService.extractFromFile(
         fullPath,
         doc.originalName,
+        doc.companyId,
       );
 
+      const nextStatus =
+        doc.status === DocumentStatus.VALIDATED
+          ? DocumentStatus.VALIDATED
+          : DocumentStatus.PENDING_APPROVAL;
+
       await doc.update({
-        status: DocumentStatus.PROCESSED,
+        status: nextStatus,
         documentType: extraction.documentType,
         summary: extraction.summary,
         documentNumber: extraction.documentNumber,
         documentDate: extraction.documentDate,
+        dueDate: extraction.dueDate,
         issuerName: extraction.issuerName,
         issuerTaxId: extraction.issuerTaxId,
         recipientName: extraction.recipientName,
+        recipientTaxId: extraction.recipientTaxId,
+        recipientPhone: extraction.recipientPhone,
+        recipientEmail: extraction.recipientEmail,
+        deliveryAddress: extraction.deliveryAddress,
         responsiblePerson: extraction.responsiblePerson,
         currency: extraction.currency,
+        netAmount: extraction.netAmount,
+        taxAmount: extraction.taxAmount,
         totalAmount: extraction.totalAmount,
+        paymentTerms: extraction.paymentTerms,
+        paymentMethod: extraction.paymentMethod,
+        referenceNumber: extraction.referenceNumber,
+        cae: extraction.cae,
+        taxCondition: extraction.taxCondition,
+        equipmentId: extraction.equipmentId,
+        equipmentModel: extraction.equipmentModel,
+        meterCount: extraction.meterCount,
         tags: extraction.tags,
+        items: (extraction as any).items || extraction.extractedData?.items || [],
         extractedData: extraction.extractedData,
         rawText: extraction.rawText,
         pageCount: extraction.pageCount,
@@ -135,6 +158,12 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
       await this.tenantQuotasService.recordDocumentAiProcessing(doc.companyId, {
         tokensUsed: extraction.tokensUsed,
       });
+
+      // Si la extracción profunda detectó más páginas que la estimación inicial, acumula el delta
+      if (extraction.pageCount && doc.pageCount && extraction.pageCount > doc.pageCount) {
+        const deltaPages = extraction.pageCount - doc.pageCount;
+        await this.tenantQuotasService.recordPagesUploaded(doc.companyId, deltaPages);
+      }
 
       await this.auditService.log({
         action: AuditAction.UPDATE,

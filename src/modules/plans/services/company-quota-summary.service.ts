@@ -93,13 +93,14 @@ export class CompanyQuotaSummaryService {
         { count: Number(r.docsCount || 0), bytes: Number(r.totalBytes || 0) },
       ]),
     );
-    const aiUsageMap = new Map<number, { queries: number; tokens: number; docsProcessed: number }>(
-      aiUsagesRaw.map((r) => [
+    const aiUsageMap = new Map<number, { queries: number; tokens: number; docsProcessed: number; pagesCount: number }>(
+      aiUsagesRaw.map((r: any) => [
         Number(r.companyId),
         {
           queries: Number(r.aiQueriesCount || 0),
           tokens: Number(r.tokensUsed || 0),
           docsProcessed: Number(r.aiDocumentsProcessed || 0),
+          pagesCount: Number(r.pagesCount || 0),
         },
       ]),
     );
@@ -108,11 +109,15 @@ export class CompanyQuotaSummaryService {
       const limits = resolveCompanyEffectiveLimits(company);
       const activeUsers = userCountMap.get(company.id) ?? 0;
       const docStats = docStatsMap.get(company.id) ?? { count: 0, bytes: 0 };
-      const aiStats = aiUsageMap.get(company.id) ?? { queries: 0, tokens: 0, docsProcessed: 0 };
+      const aiStats = aiUsageMap.get(company.id) ?? { queries: 0, tokens: 0, docsProcessed: 0, pagesCount: 0 };
       const currentStorageMb = bytesToMegabytes(docStats.bytes);
 
       const storageMetric = buildQuotaMetric(currentStorageMb, limits.maxStorageMb);
       const aiMetric = buildQuotaMetric(aiStats.queries, limits.maxAiQueriesMonthly);
+      const pagesMetric = buildQuotaMetric(
+        aiStats.pagesCount,
+        limits.maxPages ?? limits.maxDocuments,
+      );
 
       result.set(company.id, {
         companyId: company.id,
@@ -126,7 +131,8 @@ export class CompanyQuotaSummaryService {
           : null,
         useCustomLimits: Boolean(company.useCustomLimits),
         users: buildQuotaMetric(activeUsers, limits.maxUsers),
-        documents: buildQuotaMetric(docStats.count, limits.maxDocuments),
+        pages: pagesMetric,
+        documents: pagesMetric,
         storageMb: { ...storageMetric, currentBytes: docStats.bytes },
         aiQueries: {
           ...aiMetric,
@@ -134,6 +140,8 @@ export class CompanyQuotaSummaryService {
           tokensUsed: aiStats.tokens,
           aiDocumentsProcessed: aiStats.docsProcessed,
         },
+        totalPagesUploaded: company.totalPagesUploaded ?? 0,
+        activeDocumentsCount: docStats.count,
       });
     }
 

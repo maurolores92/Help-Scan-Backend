@@ -114,6 +114,18 @@ export const permissionsData = [
     description: 'Habilita el motor de consultas inteligentes y visibilidad del cupo mensual de IA',
     categoria: CategoriaPermiso.DOCUMENTS,
   },
+  {
+    name: 'VIEW_FTP_DEVICES',
+    displayName: 'Ver Impresoras HP y FTP',
+    description: 'Permite visualizar los equipos HP configurados y sus carpetas/estados de conexión FTP',
+    categoria: CategoriaPermiso.DOCUMENTS,
+  },
+  {
+    name: 'MANAGE_FTP_DEVICES',
+    displayName: 'Gestionar Impresoras HP y FTP',
+    description: 'Permite crear, editar, suspender y consultar credenciales de acceso FTP/SFTP/FTPS para equipos HP',
+    categoria: CategoriaPermiso.DOCUMENTS,
+  },
 
   // ==========================================
   // AUDITORÍA

@@ -10,6 +10,7 @@ import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TenantQuotasService } from '../plans/services/tenant-quotas.service';
 import { DocumentProcessingQueueService } from './services/document-processing-queue.service';
+import { DocumentUploadQueueService } from './services/document-upload-queue.service';
 import { TenantInboxWatcherService } from './services/tenant-inbox-watcher.service';
 
 describe('DocumentsService', () => {
@@ -19,6 +20,7 @@ describe('DocumentsService', () => {
   let notificationsServiceMock: any;
   let tenantQuotasServiceMock: any;
   let processingQueueMock: any;
+  let uploadQueueMock: any;
   let inboxWatcherMock: any;
   let tempStorageDir: string;
 
@@ -40,16 +42,23 @@ describe('DocumentsService', () => {
 
     notificationsServiceMock = {
       dispatch: jest.fn().mockResolvedValue(undefined),
+      create: jest.fn().mockResolvedValue(undefined),
     };
 
     tenantQuotasServiceMock = {
       assertCanStoreDocument: jest.fn().mockResolvedValue(undefined),
       checkDocumentQuota: jest.fn().mockResolvedValue({ allowed: true }),
       notifyQuotaExceeded: jest.fn().mockResolvedValue(undefined),
+      recordPagesUploaded: jest.fn().mockResolvedValue(undefined),
     };
 
     processingQueueMock = {
       enqueue: jest.fn(),
+    };
+
+    uploadQueueMock = {
+      enqueue: jest.fn().mockImplementation((_meta, task) => task()),
+      getStatus: jest.fn().mockReturnValue({ isProcessing: false, waitingCount: 0 }),
     };
 
     inboxWatcherMock = {
@@ -64,6 +73,7 @@ describe('DocumentsService', () => {
         { provide: NotificationsService, useValue: notificationsServiceMock },
         { provide: TenantQuotasService, useValue: tenantQuotasServiceMock },
         { provide: DocumentProcessingQueueService, useValue: processingQueueMock },
+        { provide: DocumentUploadQueueService, useValue: uploadQueueMock },
         { provide: TenantInboxWatcherService, useValue: inboxWatcherMock },
       ],
     }).compile();
@@ -201,6 +211,35 @@ describe('DocumentsService', () => {
     expect(documentModelMock.create).not.toHaveBeenCalled();
   });
 
+  it('debe permitir la subida múltiple de archivos PDF procesando cada uno de forma segura', async () => {
+    // Arrange
+    const file1 = {
+      originalname: 'Factura_1.pdf',
+      mimetype: 'application/pdf',
+      buffer: Buffer.from('%PDF-1.4 file 1'),
+      size: 1024,
+    } as Express.Multer.File;
+    const file2 = {
+      originalname: 'Factura_2.pdf',
+      mimetype: 'application/pdf',
+      buffer: Buffer.from('%PDF-1.4 file 2'),
+      size: 1024,
+    } as Express.Multer.File;
+
+    documentModelMock.create
+      .mockResolvedValueOnce({ id: 101, originalName: 'Factura_1.pdf', companyId: 2 })
+      .mockResolvedValueOnce({ id: 102, originalName: 'Factura_2.pdf', companyId: 2 });
+
+    // Act
+    const result = await service.uploadMultipleFromApp([file1, file2], { id: 9, companyId: 2 });
+
+    // Assert
+    expect(result.total).toBe(2);
+    expect(result.successCount).toBe(2);
+    expect(result.failedCount).toBe(0);
+    expect(result.documents.length).toBe(2);
+  });
+
   it('debe bloquear el acceso si una compañía intenta consultar un documento de otra compañía', async () => {
     // Arrange
     documentModelMock.findByPk.mockResolvedValueOnce({
@@ -211,5 +250,65 @@ describe('DocumentsService', () => {
 
     // Act & Assert
     await expect(service.findById(50, 1)).rejects.toThrow(ForbiddenException);
+  });
+
+  it('debe validar y confirmar un documento actualizando sus atributos y estado a VALIDATED', async () => {
+    // Arrange
+    const mockDoc = {
+      id: 99,
+      companyId: 2,
+      originalName: 'factura_0001.pdf',
+      status: DocumentStatus.PENDING_APPROVAL,
+      update: jest.fn().mockResolvedValue(true),
+    };
+    documentModelMock.findByPk.mockResolvedValueOnce(mockDoc);
+
+    // Act
+    const result = await service.validateDocument(99, 2, 5, {
+      documentType: 'factura',
+      totalAmount: 47819.20,
+      equipmentId: '7016',
+      cae: '86406410012207',
+    });
+
+    // Assert
+    expect(mockDoc.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: DocumentStatus.VALIDATED,
+        validatedByUserId: 5,
+        documentType: 'factura',
+        totalAmount: 47819.20,
+        equipmentId: '7016',
+        cae: '86406410012207',
+      }),
+    );
+    expect(result.message).toContain('validado');
+  });
+
+  it('debe rechazar un documento guardando el motivo y estado REJECTED', async () => {
+    // Arrange
+    const mockDoc = {
+      id: 101,
+      companyId: 2,
+      originalName: 'presupuesto_roto.pdf',
+      status: DocumentStatus.PENDING_APPROVAL,
+      update: jest.fn().mockResolvedValue(true),
+    };
+    documentModelMock.findByPk.mockResolvedValueOnce(mockDoc);
+
+    // Act
+    const result = await service.rejectDocument(101, 2, 5, {
+      reason: 'El documento es ilegible',
+    });
+
+    // Assert
+    expect(mockDoc.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: DocumentStatus.REJECTED,
+        validationNotes: 'El documento es ilegible',
+        validatedByUserId: 5,
+      }),
+    );
+    expect(result.message).toContain('rechazado');
   });
 });
