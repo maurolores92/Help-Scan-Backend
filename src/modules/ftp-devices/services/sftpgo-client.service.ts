@@ -211,7 +211,7 @@ export class SftpGoClientService implements OnModuleInit {
         status: device.status === FtpDeviceStatus.ACTIVE ? 1 : 0,
         home_dir: homeDir,
         permissions: {
-          '/': ['upload', 'list', 'create_dirs', 'stat'],
+          '/': ['upload', 'overwrite', 'list', 'create_dirs'],
         },
         filters: {
           allowed_ip: this.normalizeAllowedIps(device.allowedIps),
