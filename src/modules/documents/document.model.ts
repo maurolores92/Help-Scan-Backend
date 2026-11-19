@@ -275,26 +275,105 @@ export class Document extends Model {
   })
   declare taxCondition: string | null;
 
+  /**
+   * Letra fiscal del comprobante en Argentina ('A', 'B', 'C', 'M', 'E', 'R', 'X').
+   */
+  @Column({
+    type: DataType.STRING(5),
+    allowNull: true,
+    field: 'document_letter',
+  })
+  declare documentLetter: string | null;
+
+  /**
+   * Punto de venta (4 o 5 dígitos, ej: "0001", "00014").
+   */
+  @Column({
+    type: DataType.STRING(10),
+    allowNull: true,
+    field: 'point_of_sale',
+  })
+  declare pointOfSale: string | null;
+
+  /**
+   * Fecha de vencimiento del CAE de AFIP/ARCA.
+   */
+  @Column({
+    type: DataType.DATEONLY,
+    allowNull: true,
+    field: 'cae_due_date',
+  })
+  declare caeDueDate: string | null;
+
+  /**
+   * Número de Orden de Compra (OC) vinculada.
+   */
+  @Column({
+    type: DataType.STRING(100),
+    allowNull: true,
+    field: 'purchase_order_number',
+  })
+  declare purchaseOrderNumber: string | null;
+
+  /**
+   * Monto neto no gravado o exento de IVA.
+   */
+  @Column({
+    type: DataType.DECIMAL(15, 2),
+    allowNull: true,
+    field: 'exempt_amount',
+  })
+  declare exemptAmount: number | null;
+
+  /**
+   * Percepciones de IIBB, IVA u otros tributos e impuestos internos.
+   */
+  @Column({
+    type: DataType.DECIMAL(15, 2),
+    allowNull: true,
+    field: 'other_taxes_amount',
+  })
+  declare otherTaxesAmount: number | null;
+
+  /**
+   * Empresa de transporte, logística o transportista (clave en remitos y envíos).
+   */
+  @Column({
+    type: DataType.STRING(150),
+    allowNull: true,
+    field: 'carrier_name',
+  })
+  declare carrierName: string | null;
+
+  /**
+   * Sector, departamento o centro de costos de la empresa (ej: Compras, Ventas, Administración, Taller).
+   */
+  @Column({
+    type: DataType.STRING(100),
+    allowNull: true,
+    field: 'department',
+  })
+  declare department: string | null;
+
+  /**
+   * Sucursal, planta o depósito de la empresa.
+   */
+  @Column({
+    type: DataType.STRING(100),
+    allowNull: true,
+    field: 'branch',
+  })
+  declare branch: string | null;
+
+  /**
+   * Período comercial o mes facturado (ej: "11/2026").
+   */
   @Column({
     type: DataType.STRING(50),
     allowNull: true,
-    field: 'equipment_id',
+    field: 'period',
   })
-  declare equipmentId: string | null;
-
-  @Column({
-    type: DataType.STRING(100),
-    allowNull: true,
-    field: 'equipment_model',
-  })
-  declare equipmentModel: string | null;
-
-  @Column({
-    type: DataType.STRING(100),
-    allowNull: true,
-    field: 'meter_count',
-  })
-  declare meterCount: string | null;
+  declare period: string | null;
 
   @Column({
     type: DataType.INTEGER,

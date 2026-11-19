@@ -30,9 +30,16 @@ export interface UniversalDocumentExtractionResult {
   referenceNumber: string | null;
   cae: string | null;
   taxCondition: string | null;
-  equipmentId: string | null;
-  equipmentModel: string | null;
-  meterCount: string | null;
+  documentLetter: string | null;
+  pointOfSale: string | null;
+  caeDueDate: string | null;
+  purchaseOrderNumber: string | null;
+  exemptAmount: number | null;
+  otherTaxesAmount: number | null;
+  carrierName: string | null;
+  department: string | null;
+  branch: string | null;
+  period: string | null;
   tags: string[];
   items: Array<DocumentArticleItem>;
   extractedData: {
@@ -45,7 +52,7 @@ export interface UniversalDocumentExtractionResult {
   rawText: string;
   pageCount: number;
   aiConfidence: number;
-  extractionEngine: 'gemini_vision' | 'gemini_text' | 'local_parser';
+  extractionEngine: 'gemini_vision' | 'gemini_text' | 'local_parser' | 'python_ocr' | string;
   tokensUsed: number;
 }
 
@@ -413,26 +420,54 @@ export const extractUniversalHeuristicsFromText = (
   const taxCondMatch = cleanText.match(/\b(responsable\s*inscripto|monotributo|exento|consumidor\s*final)\b/i);
   const taxCondition = taxCondMatch ? taxCondMatch[1] : null;
 
-  // ID de equipo o impresora (ej. "ID: 1532", "ID: 7016", "ID: 3846")
-  const equipIdMatch = cleanText.match(/\bID[:\s]*(\d{2,10})\b/i);
-  const equipmentId = equipIdMatch ? equipIdMatch[1] : null;
+  // Letra del comprobante en Argentina ('A', 'B', 'C', 'M', 'E', 'R', 'X')
+  const letterMatch =
+    cleanText.match(/\b(?:FACTURA|NOTA DE D[EÉ]BITO|NOTA DE CR[EÉ]DITO|REMITO|RECIBO)\s+([ABCMERX])\b/i) ||
+    cleanText.match(/\bCOD(?:IGO)?\.?\s*\d+\s+([ABCMERX])\b/i) ||
+    cleanText.match(/(?:^|\n|\s)LETRA\s*[:\s]*([ABCMERX])\b/i);
+  const documentLetter = letterMatch ? letterMatch[1].toUpperCase() : null;
 
-  // Modelo de equipo (ej. "MP 161 SPF", "M320F", "E52645")
-  const equipModelMatch =
-    cleanText.match(/Equipo[:\s]*([^,\n\r\t]+?)(?:\s+ID[:\s]|\n|$)/i) ||
-    cleanText.match(/\b(MP\s*\d+\s*[A-Z]*|M320F|E52645|LaserJet[A-Za-z0-9\s-]+)\b/i);
-  const equipmentModel = equipModelMatch ? equipModelMatch[1].trim() : null;
+  // Punto de venta
+  const posMatch =
+    cleanText.match(/(?:punto\s+de\s+venta|pto\.\s*vta|pv)[:\s]*(\d{1,5})/i) ||
+    (docNumMatch ? docNumMatch[1].match(/^(\d{4,5})-/) : null);
+  const pointOfSale = posMatch ? (posMatch[1] || posMatch[0].replace('-', '')).padStart(4, '0') : null;
 
-  // Contador de copias (ej. "ACT:8-ANT:7")
-  const meterMatch = cleanText.match(/ACT[:\s]*(\d+)\s*-\s*ANT[:\s]*(\d+)/i);
-  const meterCount = meterMatch ? `ACT:${meterMatch[1]} - ANT:${meterMatch[2]}` : null;
+  // Vencimiento CAE
+  const caeVtoMatch = cleanText.match(/(?:vto\.?\s*(?:de\s*)?cae|vencimiento\s*cae)[:\s]*([^\n\r]+)/i);
+  const caeDueDate = caeVtoMatch ? parseSpanishOrIsoDate(caeVtoMatch[1]) : null;
+
+  // Orden de Compra asociada
+  const ocMatch = cleanText.match(/(?:orden\s+de\s+compra|o\.?c\.?|orden\s+compra)[:\s#]*([A-Za-z0-9\-\/]{3,30})/i);
+  const purchaseOrderNumber = ocMatch ? ocMatch[1].trim() : null;
+
+  // Monto no gravado / exento
+  const exemptMatch = cleanText.match(/(?:no\s+gravado|importe\s+exento|exento)[:\s]*\$?\s*([0-9.,]+)/i);
+  const exemptAmount = exemptMatch ? parseAmountValue(exemptMatch[1]) : null;
+
+  // Percepciones / otros tributos
+  const otherTaxMatch = cleanText.match(/(?:percepci[oó]n|percepciones|iibb|otros\s+tributos)[:\s]*\$?\s*([0-9.,]+)/i);
+  const otherTaxesAmount = otherTaxMatch ? parseAmountValue(otherTaxMatch[1]) : null;
+
+  // Empresa de transporte / transportista (en remitos)
+  const carrierMatch = cleanText.match(/(?:transporte|transportista|chofer|expreso)[:\s]*([^\n\r]{3,60})/i);
+  const carrierName = carrierMatch ? carrierMatch[1].trim() : null;
+
+  // Sector / Departamento / Centro de costos
+  const deptMatch = cleanText.match(/(?:sector|departamento|dpto|centro\s+de\s+costos?|c\.?c\.?)[:\s]*([^\n\r]{3,50})/i);
+  const department = deptMatch ? deptMatch[1].trim() : null;
+
+  // Sucursal / Depósito
+  const branchMatch = cleanText.match(/(?:sucursal|planta|dep[oó]sito)[:\s]*([^\n\r]{3,50})/i);
+  const branch = branchMatch ? branchMatch[1].trim() : null;
+
+  // Período facturado
+  const periodMatch = cleanText.match(/(?:per[ií]odo\s+(?:facturado|desde|mes)?|mes)[:\s]*([^\n\r]{4,30})/i);
+  const period = periodMatch ? periodMatch[1].trim() : null;
 
   // Emisor / Proveedor
   const issuerMatch = cleanText.match(/(?:proveedor|emisor|empresa)\s*:\s*([^\n]{3,90})/i);
-  let issuerName = issuerMatch ? issuerMatch[1].trim() : null;
-  if (!issuerName && /HELP\s*COPIES/i.test(cleanText)) {
-    issuerName = 'HELP COPIES S.R.L.';
-  }
+  const issuerName = issuerMatch ? issuerMatch[1].trim() : null;
 
   // Cliente / Destinatario / Razón Social
   const recipientMatch =
@@ -516,9 +551,11 @@ export const extractUniversalHeuristicsFromText = (
     }
   }
 
-  if (equipmentId) attributes['equipo_id'] = equipmentId;
-  if (meterCount) attributes['contador'] = meterCount;
   if (cae) attributes['cae'] = cae;
+  if (documentLetter) attributes['letra'] = documentLetter;
+  if (pointOfSale) attributes['punto_venta'] = pointOfSale;
+  if (purchaseOrderNumber) attributes['orden_compra'] = purchaseOrderNumber;
+  if (department) attributes['sector'] = department;
 
   const firstLines = lines.slice(0, 3).join(' · ').slice(0, 220);
   const summary = cleanText.length > 20
@@ -526,7 +563,7 @@ export const extractUniversalHeuristicsFromText = (
     : `Archivo PDF registrado (${originalFileName}). Procesado con motor OCR nativo.`;
 
   const tags = [detectedType];
-  if (equipmentId) tags.push(`id_${equipmentId}`);
+  if (documentLetter) tags.push(`letra_${documentLetter.toLowerCase()}`);
   if (detectedType === 'factura') tags.push('afip');
   if (!cleanText) tags.push('escaneo_imagen');
 
@@ -555,9 +592,16 @@ export const extractUniversalHeuristicsFromText = (
     referenceNumber: null,
     cae,
     taxCondition,
-    equipmentId,
-    equipmentModel,
-    meterCount,
+    documentLetter,
+    pointOfSale,
+    caeDueDate,
+    purchaseOrderNumber,
+    exemptAmount,
+    otherTaxesAmount,
+    carrierName,
+    department,
+    branch,
+    period,
     tags,
     items: extractedItems,
     extractedData: {

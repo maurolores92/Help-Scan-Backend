@@ -25,8 +25,9 @@ export const buildDocumentSearchWhere = (
     documentType,
     dateFrom,
     dateTo,
-    equipmentId,
-    equipmentModel,
+    purchaseOrderNumber,
+    department,
+    documentLetter,
     recipientTaxId,
     minAmount,
     maxAmount,
@@ -46,12 +47,16 @@ export const buildDocumentSearchWhere = (
     andConditions.push({ documentType: documentType.toLowerCase().trim() });
   }
 
-  if (equipmentId) {
-    andConditions.push({ equipmentId: { [likeOp]: `%${equipmentId.trim()}%` } });
+  if (purchaseOrderNumber) {
+    andConditions.push({ purchaseOrderNumber: { [likeOp]: `%${purchaseOrderNumber.trim()}%` } });
   }
 
-  if (equipmentModel) {
-    andConditions.push({ equipmentModel: { [likeOp]: `%${equipmentModel.trim()}%` } });
+  if (department) {
+    andConditions.push({ department: { [likeOp]: `%${department.trim()}%` } });
+  }
+
+  if (documentLetter) {
+    andConditions.push({ documentLetter: documentLetter.toUpperCase().trim() });
   }
 
   if (recipientTaxId) {
@@ -88,8 +93,9 @@ export const buildDocumentSearchWhere = (
       { recipientName: { [likeOp]: wildcard } },
       { recipientTaxId: { [likeOp]: wildcard } },
       { deliveryAddress: { [likeOp]: wildcard } },
-      { equipmentId: { [likeOp]: wildcard } },
-      { equipmentModel: { [likeOp]: wildcard } },
+      { purchaseOrderNumber: { [likeOp]: wildcard } },
+      { department: { [likeOp]: wildcard } },
+      { carrierName: { [likeOp]: wildcard } },
       { referenceNumber: { [likeOp]: wildcard } },
       { cae: { [likeOp]: wildcard } },
       { responsiblePerson: { [likeOp]: wildcard } },

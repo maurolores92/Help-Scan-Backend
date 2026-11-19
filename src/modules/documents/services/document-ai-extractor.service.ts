@@ -9,9 +9,25 @@ import {
 
 const MIN_NATIVE_TEXT_LENGTH = 80;
 
-const EXTRACTION_SYSTEM_PROMPT = `Eres un motor experto de análisis documental y extracción semántica empresarial multirubro.
-Cada empresa puede subir cualquier tipo de PDF (facturas, remitos, notas de pedido, contratos, órdenes de servicio, recibos de sueldo, legajos, presupuestos, oficios, órdenes de compra, etc.).
-Analiza el documento y devuelve ESTRICTAMENTE un objeto JSON válido (sin bloques markdown ni texto adicional) con esta estructura exacta:
+const EXTRACTION_SYSTEM_PROMPT = `Eres un motor experto de análisis documental y extracción semántica empresarial multirubro, especializado en comprobantes fiscales, comerciales, técnicos y administrativos de Argentina y Latinoamérica.
+
+INSTRUCCIONES CLAVE DE EXTRACCIÓN Y NORMALIZACIÓN:
+1. Comprobantes fiscales y comerciales:
+   - Identifica el tipo exacto: "factura_a", "factura_b", "factura_c", "remito", "presupuesto", "nota_pedido", "orden_compra", "recibo", "orden_servicio", "contrato", "legajo", "otro".
+   - Número de documento: Si tiene punto de venta o sucursal, normaliza a formato de 5 y 8 dígitos ej: "00008-00041980" o el identificador visible.
+   - Emisor vs Receptor: Distingue con precisión quién emite la factura (proveedor/prestador) y quién la recibe (cliente/señores/domicilio de entrega).
+   - CUITs: Formato XX-XXXXXXXX-X (11 dígitos). Corrige automáticamente errores ópticos comunes de OCR (como letra 'O' por número '0', o barras '/' por guiones '-').
+   - CAE: Si figura CAE de AFIP (código de 14 dígitos numéricos), extráelo limpio en "cae".
+   - Condición fiscal de IVA: Clasifica estrictamente en una de: "Responsable Inscripto", "Monotributo", "Exento", "Consumidor Final", "No Responsable".
+   - Fechas: Normaliza siempre a formato ISO "YYYY-MM-DD".
+   - Montos numéricos: Extrae valores numéricos flotantes limpios (ej: 154200.50), sin símbolos de moneda ni separadores de miles.
+     * "netAmount": subtotal o base imponible neta sin impuestos.
+     * "taxAmount": total de IVA u otros tributos.
+     * "totalAmount": importe total final a pagar.
+   - Ítems / Artículos: Extrae cada renglón de producto o servicio con { "code": string|null, "description": string, "quantity": number|null, "unitPrice": number|null, "subtotal": number|null }.
+   - Equipos y Servicios Técnicos: Si el comprobante menciona impresoras, fotocopiadoras o máquinas (ej. HP LaserJet, Ricoh MP), extrae "equipmentId" (ej: "7016"), "equipmentModel" (ej: "HP LaserJet Managed E52645") y "meterCount" (contadores ej: "ACT:8 - ANT:7").
+
+Analiza el texto o documento y devuelve ESTRICTAMENTE un objeto JSON válido (sin bloques markdown ni explicaciones adicionales) con esta estructura exacta:
 {
   "documentType": "string en snake_case minúscula (ej: factura, remito, nota_pedido, presupuesto, orden_compra, recibo, orden_servicio, contrato, legajo, etc.)",
   "summary": "resumen ejecutivo claro en español (1 a 2 oraciones) con los datos más importantes",
@@ -19,25 +35,32 @@ Analiza el documento y devuelve ESTRICTAMENTE un objeto JSON válido (sin bloque
   "documentDate": "YYYY-MM-DD o null (fecha principal del documento)",
   "dueDate": "YYYY-MM-DD o null (fecha de vencimiento del pago o validez de la oferta)",
   "issuerName": "string o null (nombre/razón social del proveedor, emisor o prestador)",
-  "issuerTaxId": "string o null (CUIT, RUT, DNI o identificador fiscal del emisor)",
+  "issuerTaxId": "string o null (CUIT, RUT, DNI o identificador fiscal del emisor en formato XX-XXXXXXXX-X)",
   "recipientName": "string o null (cliente, destinatario o receptor)",
-  "recipientTaxId": "string o null (CUIT, DNI o identificador fiscal del cliente)",
+  "recipientTaxId": "string o null (CUIT, DNI o identificador fiscal del cliente en formato XX-XXXXXXXX-X)",
   "recipientPhone": "string o null (teléfono o celular de contacto)",
   "recipientEmail": "string o null (correo electrónico de contacto)",
   "deliveryAddress": "string o null (domicilio de entrega, localidad o dirección)",
   "responsiblePerson": "string o null (persona responsable, contacto comercial, técnico firmante o solicitante)",
-  "currency": "ARS | USD | EUR | null (solo si existen importes monetarios)",
+  "currency": "ARS | USD | EUR | null",
   "netAmount": "number o null (subtotal o importe neto gravado sin impuestos)",
   "taxAmount": "number o null (monto total de IVA u otros impuestos)",
   "totalAmount": "number o null (monto final total a pagar numérico, ej: 47819.20)",
   "paymentTerms": "string o null (condición de venta, ej: CTA. CTE. 15 DIAS, contado, cheque, validez 5 días)",
   "paymentMethod": "string o null (Transferencia Bancaria, Cheque, Efectivo, etc.)",
   "referenceNumber": "string o null (número de orden de compra o remito asociado si figura)",
-  "cae": "string o null (código CAE de AFIP de 14 dígitos)",
-  "taxCondition": "string o null (Responsable Inscripto, Monotributo, Exento, Consumidor Final)",
-  "equipmentId": "string o null (código o ID numérico/alfanumérico del equipo, ej: 7016, 1532, 3846)",
-  "equipmentModel": "string o null (modelo del equipo o máquina, ej: MP 161 SPF, M320F, E52645)",
-  "meterCount": "string o null (contador actual/anterior o copias, ej: ACT:8-ANT:7)",
+  "cae": "string o null (código CAE de AFIP de 14 dígitos continuos)",
+  "taxCondition": "Responsable Inscripto | Monotributo | Exento | Consumidor Final | No Responsable | null",
+  "documentLetter": "A | B | C | M | E | R | X | null",
+  "pointOfSale": "string o null (4 o 5 dígitos ej: 0001, 00014)",
+  "caeDueDate": "YYYY-MM-DD o null",
+  "purchaseOrderNumber": "string o null (número de Orden de Compra)",
+  "exemptAmount": "number o null (monto exento o no gravado)",
+  "otherTaxesAmount": "number o null (percepciones IIBB u otros tributos)",
+  "carrierName": "string o null (empresa de transporte o transportista)",
+  "department": "string o null (sector o centro de costos)",
+  "branch": "string o null (sucursal o depósito)",
+  "period": "string o null (período facturado)",
   "tags": ["etiquetas clave en español minúscula"],
   "attributes": { "clave_dinamica_snake_case": "cualquier dato propio relevante" },
   "items": [ { "code": "string|null", "description": "string", "quantity": "number|null", "unitPrice": "number|null", "subtotal": "number|null" } ],
@@ -46,6 +69,10 @@ Analiza el documento y devuelve ESTRICTAMENTE un objeto JSON válido (sin bloque
   "amounts": { "subtotal": 0, "impuestos": 0 },
   "aiConfidence": 0.95
 }`;
+
+const ANSI_GREEN = '\x1b[92m';
+const ANSI_BOLD = '\x1b[1m';
+const ANSI_RESET = '\x1b[0m';
 
 /**
  * Servicio de extracción documental de alto rendimiento:
@@ -61,11 +88,16 @@ export class DocumentAiExtractorService implements OnModuleInit {
   async onModuleInit() {
     const ocrUrl = process.env.OCR_SERVICE_URL?.trim();
     if (ocrUrl) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
       try {
         const target = `${ocrUrl.replace(/\/+$/, '')}/health`;
-        const res = await fetch(target, { signal: AbortSignal.timeout(5000) });
+        const res = await fetch(target, { signal: controller.signal });
         if (res.ok) {
           const body = await res.json().catch(() => ({}));
+          console.log(
+            `\n${ANSI_GREEN}${ANSI_BOLD}✔ [CONEXIÓN OCR PYTHON EXITOSA] Microservicio OCR activo en ${ocrUrl} (Estado: ${body.status || 'OK'}, Motor: ${body.service || 'HC-Scan OCR'})${ANSI_RESET}`
+          );
           this.logger.log(
             `🚀 [OCR Microservice] Conexión exitosa con Python en ${ocrUrl} (Status: ${body.status || 'OK'}, Motor: ${body.service || 'HC-Scan OCR'})`,
           );
@@ -78,10 +110,27 @@ export class DocumentAiExtractorService implements OnModuleInit {
         this.logger.warn(
           `⚠️ [OCR Microservice] No se pudo verificar conexión al iniciar en ${ocrUrl} (${err?.message}). Verifique que el servicio OCR esté en ejecución en la misma red de Coolify.`,
         );
+      } finally {
+        clearTimeout(timeout);
       }
     } else {
       this.logger.log(
         '[OCR Microservice] No se configuró OCR_SERVICE_URL. Operando en modo local nativo (pdf-parse).',
+      );
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY?.trim();
+    const model = process.env.GEMINI_MODEL?.trim() || 'gemini-3.5-flash';
+    const effectiveModel = model === 'gemini-2.5-flash' ? 'gemini-3.5-flash' : model;
+    const mode = (process.env.EXTRACTION_MODE || (apiKey ? 'hybrid' : 'local')).toUpperCase();
+
+    if (apiKey) {
+      console.log(
+        `${ANSI_GREEN}${ANSI_BOLD}✔ [IA GEMINI CONECTADA] API Key detectada | Modelo primario: ${effectiveModel} (con cascada automática de fallback) | Modo: ${mode}${ANSI_RESET}\n`
+      );
+    } else {
+      console.log(
+        `\x1b[93m⚠️ [IA GEMINI] No se detectó GEMINI_API_KEY en variables de entorno. Extracción operará en modo local.\x1b[0m\n`
       );
     }
   }
@@ -109,12 +158,39 @@ export class DocumentAiExtractorService implements OnModuleInit {
     const apiKey = process.env.GEMINI_API_KEY?.trim();
     const extractionMode = (process.env.EXTRACTION_MODE || (apiKey ? 'hybrid' : 'local')).toLowerCase().trim();
 
-    // 1. Si existe microservicio Python de OCR configurado (PyMuPDF + Tesseract en español), delegarle la extracción
+    // 1. Si existe microservicio Python de OCR configurado (PyMuPDF + Tesseract en español), delegarle la extracción óptica
     const ocrUrl = process.env.OCR_SERVICE_URL?.trim();
     if (ocrUrl) {
       try {
         const pythonResult = await this.callPythonOcrService(fileBuffer, originalFileName, ocrUrl);
         if (pythonResult) {
+          // Si disponemos de GEMINI_API_KEY y no estamos en modo forzado 'local', pasamos el texto en bruto
+          // extraído por Python a Gemini 3.8 Flash para estructuración semántica de alta precisión del modal
+          if (apiKey && extractionMode !== 'local') {
+            const rawTextToAnalyze = (pythonResult.rawText || nativeText || '').trim();
+            if (rawTextToAnalyze.length >= 15) {
+              try {
+                this.logger.log(
+                  `[DocumentAiExtractor] 🧠 Enriqueciendo texto OCR de Python con Gemini (${process.env.GEMINI_MODEL || 'gemini-3.8-flash'}) para '${originalFileName}' (${rawTextToAnalyze.length} caracteres)...`,
+                );
+                return await this.callGeminiExtractor({
+                  apiKey,
+                  mode: 'gemini_text',
+                  nativeText: rawTextToAnalyze,
+                  fileBuffer,
+                  originalFileName,
+                  pageCount: pythonResult.pageCount || pageCount || 1,
+                  fallbackResult: pythonResult,
+                });
+              } catch (geminiErr: any) {
+                this.logger.warn(
+                  `[DocumentAiExtractor] ⚠️ Falló estructuración Gemini (${geminiErr?.message}). Retornando extracción base de Python como fallback.`,
+                );
+                return pythonResult;
+              }
+            }
+          }
+
           return pythonResult;
         }
       } catch (err: any) {
@@ -182,48 +258,95 @@ export class DocumentAiExtractorService implements OnModuleInit {
     fileBuffer: Buffer;
     originalFileName: string;
     pageCount: number;
+    fallbackResult?: UniversalDocumentExtractionResult;
   }): Promise<UniversalDocumentExtractionResult> {
-    const model = process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash';
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${params.apiKey}`;
+    const userModel = process.env.GEMINI_MODEL?.trim();
+    const primaryModel =
+      !userModel || userModel === 'gemini-2.5-flash' ? 'gemini-3.5-flash' : userModel;
+
+    // Cascada de modelos en orden de resiliencia
+    const candidateModels = Array.from(
+      new Set([
+        primaryModel,
+        'gemini-3.5-flash',
+        'gemini-flash-lite-latest',
+        'gemini-3.8-flash',
+        'gemini-flash-latest',
+      ]),
+    );
 
     const parts: any[] =
       params.mode === 'gemini_text'
         ? [
-            {
-              text: `${EXTRACTION_SYSTEM_PROMPT}\n\nNombre del archivo: ${params.originalFileName}\nCantidad de páginas: ${params.pageCount}\n\nTexto digital nativo del PDF:\n${params.nativeText.slice(0, 50000)}`,
-            },
-          ]
+          {
+            text: `${EXTRACTION_SYSTEM_PROMPT}\n\nNombre del archivo: ${params.originalFileName}\nCantidad de páginas: ${params.pageCount}\n\nTexto extraído (OCR / Capa Nativa):\n${params.nativeText.slice(0, 50000)}`,
+          },
+        ]
         : [
-            {
-              inlineData: {
-                mimeType: 'application/pdf',
-                data: params.fileBuffer.toString('base64'),
-              },
+          {
+            inlineData: {
+              mimeType: 'application/pdf',
+              data: params.fileBuffer.toString('base64'),
             },
-            {
-              text: `${EXTRACTION_SYSTEM_PROMPT}\n\nNombre original del archivo escaneado: ${params.originalFileName}`,
+          },
+          {
+            text: `${EXTRACTION_SYSTEM_PROMPT}\n\nNombre original del archivo escaneado: ${params.originalFileName}`,
+          },
+        ];
+
+    let json: any = null;
+    let successfulModel = '';
+    let lastError: Error | null = null;
+
+    for (const model of candidateModels) {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${params.apiKey}`;
+      try {
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts }],
+            generationConfig: {
+              temperature: 0.1,
+              responseMimeType: 'application/json',
+              maxOutputTokens: 4096,
             },
-          ];
+          }),
+        });
 
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts }],
-        generationConfig: {
-          temperature: 0.1,
-          responseMimeType: 'application/json',
-          maxOutputTokens: 1024,
-        },
-      }),
-    });
+        if (!response.ok) {
+          const errBody = await response.text();
+          // 404 = modelo discontinuado o no disponible para la cuenta
+          // 503 = sobrecarga momentánea en Google
+          // 429 = límite de tasa momentáneo
+          if ([404, 503, 429].includes(response.status)) {
+            this.logger.warn(
+              `[DocumentAiExtractor] Modelo '${model}' devolvió HTTP ${response.status}. Activando siguiente modelo en cascada...`,
+            );
+            lastError = new Error(`HTTP ${response.status} en '${model}': ${errBody.slice(0, 150)}`);
+            continue;
+          }
+          throw new Error(`HTTP ${response.status}: ${errBody.slice(0, 250)}`);
+        }
 
-    if (!response.ok) {
-      const errBody = await response.text();
-      throw new Error(`HTTP ${response.status}: ${errBody.slice(0, 250)}`);
+        json = await response.json();
+        successfulModel = model;
+        break;
+      } catch (reqErr: any) {
+        lastError = reqErr;
+        const isLast = candidateModels.indexOf(model) === candidateModels.length - 1;
+        if (!isLast) {
+          this.logger.warn(
+            `[DocumentAiExtractor] Reintentando tras error con modelo '${model}' (${reqErr?.message})...`,
+          );
+        }
+      }
     }
 
-    const json: any = await response.json();
+    if (!json || !successfulModel) {
+      throw lastError || new Error('Ningún modelo Gemini respondió exitosamente');
+    }
+
     const rawCandidate = json?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
     const tokensUsed = Number(json?.usageMetadata?.totalTokenCount || 0);
     const parsed = this.safeParseJsonObject(rawCandidate);
@@ -249,14 +372,60 @@ export class DocumentAiExtractorService implements OnModuleInit {
         ? Number(parsed.taxAmount)
         : null;
 
-    // Fallback heurístico para complementar lo que Gemini pudiera omitir
-    const fallback = extractUniversalHeuristicsFromText(
-      params.nativeText,
-      params.originalFileName,
-      params.pageCount,
-    );
+    // Fallback prioritario: resultado base de Python o heurísticas locales
+    const fallback =
+      params.fallbackResult ||
+      extractUniversalHeuristicsFromText(
+        params.nativeText,
+        params.originalFileName,
+        params.pageCount,
+      );
 
-    return {
+    // Normalización de ítems / artículos de la tabla para coincidencia con el modal
+    const rawItems =
+      Array.isArray(parsed.items) && parsed.items.length > 0
+        ? parsed.items
+        : Array.isArray(fallback.items) && fallback.items.length > 0
+          ? fallback.items
+          : Array.isArray(fallback.extractedData?.items) && fallback.extractedData.items.length > 0
+            ? fallback.extractedData.items
+            : [];
+
+    const normalizedItems = rawItems.map((it: any, idx: number) => ({
+      id: `item-${idx + 1}`,
+      codigo: it.codigo || it.code || null,
+      nombre: it.nombre || it.description || it.descripcion || `Artículo #${idx + 1}`,
+      cantidad:
+        it.cantidad !== null && it.cantidad !== undefined && !isNaN(Number(it.cantidad))
+          ? Number(it.cantidad)
+          : it.quantity !== null && it.quantity !== undefined && !isNaN(Number(it.quantity))
+            ? Number(it.quantity)
+            : 1,
+      precioSinIva:
+        it.precioSinIva !== null && it.precioSinIva !== undefined && !isNaN(Number(it.precioSinIva))
+          ? Number(it.precioSinIva)
+          : it.precio_sin_iva !== null && it.precio_sin_iva !== undefined && !isNaN(Number(it.precio_sin_iva))
+            ? Number(it.precio_sin_iva)
+            : it.unitPrice !== null && it.unitPrice !== undefined && !isNaN(Number(it.unitPrice))
+              ? Number(it.unitPrice)
+              : null,
+      precioFinal:
+        it.precioFinal !== null && it.precioFinal !== undefined && !isNaN(Number(it.precioFinal))
+          ? Number(it.precioFinal)
+          : it.precio_final !== null && it.precio_final !== undefined && !isNaN(Number(it.precio_final))
+            ? Number(it.precio_final)
+            : it.subtotal !== null && it.subtotal !== undefined && !isNaN(Number(it.subtotal))
+              ? Number(it.subtotal)
+              : null,
+      ivaPorcentaje:
+        it.ivaPorcentaje !== null && it.ivaPorcentaje !== undefined && !isNaN(Number(it.ivaPorcentaje))
+          ? Number(it.ivaPorcentaje)
+          : it.iva_porcentaje !== null && it.iva_porcentaje !== undefined && !isNaN(Number(it.iva_porcentaje))
+            ? Number(it.iva_porcentaje)
+            : null,
+    }));
+
+    const result: UniversalDocumentExtractionResult = {
       documentType: normalizedType || fallback.documentType,
       summary: String(parsed.summary || fallback.summary),
       documentNumber: parsed.documentNumber ? String(parsed.documentNumber).slice(0, 100) : fallback.documentNumber,
@@ -287,19 +456,30 @@ export class DocumentAiExtractorService implements OnModuleInit {
       referenceNumber: parsed.referenceNumber ? String(parsed.referenceNumber).slice(0, 100) : fallback.referenceNumber,
       cae: parsed.cae ? String(parsed.cae).slice(0, 30) : fallback.cae,
       taxCondition: parsed.taxCondition ? String(parsed.taxCondition).slice(0, 60) : fallback.taxCondition,
-      equipmentId: parsed.equipmentId ? String(parsed.equipmentId).slice(0, 50) : fallback.equipmentId,
-      equipmentModel: parsed.equipmentModel ? String(parsed.equipmentModel).slice(0, 100) : fallback.equipmentModel,
-      meterCount: parsed.meterCount ? String(parsed.meterCount).slice(0, 100) : fallback.meterCount,
+      documentLetter: parsed.documentLetter ? String(parsed.documentLetter).slice(0, 5).toUpperCase() : fallback.documentLetter,
+      pointOfSale: parsed.pointOfSale ? String(parsed.pointOfSale).slice(0, 10) : fallback.pointOfSale,
+      caeDueDate: parsed.caeDueDate ? String(parsed.caeDueDate).slice(0, 10) : fallback.caeDueDate,
+      purchaseOrderNumber: parsed.purchaseOrderNumber ? String(parsed.purchaseOrderNumber).slice(0, 100) : fallback.purchaseOrderNumber,
+      exemptAmount: typeof parsed.exemptAmount === 'number' ? parsed.exemptAmount : fallback.exemptAmount,
+      otherTaxesAmount: typeof parsed.otherTaxesAmount === 'number' ? parsed.otherTaxesAmount : fallback.otherTaxesAmount,
+      carrierName: parsed.carrierName ? String(parsed.carrierName).slice(0, 150) : fallback.carrierName,
+      department: parsed.department ? String(parsed.department).slice(0, 100) : fallback.department,
+      branch: parsed.branch ? String(parsed.branch).slice(0, 100) : fallback.branch,
+      period: parsed.period ? String(parsed.period).slice(0, 50) : fallback.period,
       tags: Array.isArray(parsed.tags)
         ? parsed.tags.map((t: any) => String(t).toLowerCase().trim()).filter(Boolean).slice(0, 15)
         : fallback.tags,
-      items: Array.isArray(parsed.items) && parsed.items.length > 0 ? parsed.items : fallback.items || fallback.extractedData.items,
+      items: normalizedItems,
       extractedData: {
         attributes: {
           ...fallback.extractedData.attributes,
           ...(parsed.attributes && typeof parsed.attributes === 'object' ? parsed.attributes : {}),
+          ...(parsed.cae ? { cae: parsed.cae } : {}),
+          ...(parsed.documentLetter ? { letra: parsed.documentLetter } : {}),
+          ...(parsed.purchaseOrderNumber ? { orden_compra: parsed.purchaseOrderNumber } : {}),
+          ...(parsed.department ? { sector: parsed.department } : {}),
         },
-        items: Array.isArray(parsed.items) && parsed.items.length > 0 ? parsed.items : fallback.items || fallback.extractedData.items,
+        items: normalizedItems,
         involvedParties: Array.isArray(parsed.involvedParties) ? parsed.involvedParties : [],
         dates: {
           ...fallback.extractedData.dates,
@@ -310,25 +490,65 @@ export class DocumentAiExtractorService implements OnModuleInit {
           ...(parsed.amounts && typeof parsed.amounts === 'object' ? parsed.amounts : {}),
         },
       },
-      // Usamos directamente el texto nativo ya extraído por pdf-parse en milisegundos
       rawText: params.nativeText || String(parsed.rawText || '').trim(),
       pageCount: params.pageCount,
       aiConfidence:
         typeof parsed.aiConfidence === 'number'
           ? Math.max(0, Math.min(1, parsed.aiConfidence))
-          : 0.9,
+          : 0.95,
       extractionEngine: params.mode,
       tokensUsed,
     };
+
+    const docTypeLabel = (result.documentType || 'general').toUpperCase();
+    const confPercent = ((result.aiConfidence || 0.95) * 100).toFixed(0);
+    const totalDisplay = result.totalAmount !== null && result.totalAmount !== undefined ? `$ ${result.totalAmount.toLocaleString('es-AR')}` : 'No detectado';
+    const issuerDisplay = result.issuerName || 'No detectado';
+    const numberDisplay = result.documentNumber || 'S/N';
+
+    console.log(
+      `\n${ANSI_GREEN}${ANSI_BOLD}========================================================================${ANSI_RESET}` +
+      `\n${ANSI_GREEN}${ANSI_BOLD}✔ [GEMINI IA EXITOSO]${ANSI_RESET} ${ANSI_GREEN}Estructuración y análisis inteligente completado para '${params.originalFileName}'${ANSI_RESET}` +
+      `\n${ANSI_GREEN}  • Modelo IA: ${successfulModel} (${params.mode === 'gemini_text' ? 'Texto Semántico' : 'Visión Multimodal'})` +
+      `\n${ANSI_GREEN}  • Tipo Clasificado: '${docTypeLabel}' | Emisor: '${issuerDisplay}'` +
+      `\n${ANSI_GREEN}  • Importe Total: ${totalDisplay} | CUIT: ${result.issuerTaxId || 'S/D'}` +
+      `\n${ANSI_GREEN}  • N° Comprobante: ${numberDisplay}${result.cae ? ` | CAE: ${result.cae}` : ''}` +
+      `\n${ANSI_GREEN}  • Nivel de Confianza IA: ${confPercent}% | Tokens consumidos: ${tokensUsed}${ANSI_RESET}` +
+      `\n${ANSI_GREEN}${ANSI_BOLD}========================================================================${ANSI_RESET}\n`
+    );
+
+    this.logger.log(
+      `[DocumentAiExtractor] 🧠 Gemini IA estructuró exitosamente '${params.originalFileName}' como '${docTypeLabel}' (${confPercent}% confianza, ${tokensUsed} tokens)`,
+    );
+
+    return result;
   }
 
   private safeParseJsonObject(raw: string): Record<string, any> {
-    const cleaned = raw
-      .replace(/^```json\s*/i, '')
-      .replace(/^```\s*/i, '')
-      .replace(/```$/i, '')
-      .trim();
-    return JSON.parse(cleaned);
+    if (!raw || typeof raw !== 'string') return {};
+
+    // 1. Limpiar bloques markdown con posibles espacios o saltos de línea al final
+    let cleaned = raw.trim();
+    const markdownMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    if (markdownMatch && markdownMatch[1]) {
+      cleaned = markdownMatch[1].trim();
+    }
+
+    // 2. Si todavía hay texto adicional antes o después, aislar entre '{' y '}'
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      cleaned = cleaned.slice(firstBrace, lastBrace + 1).trim();
+    }
+
+    try {
+      return JSON.parse(cleaned);
+    } catch (err: any) {
+      this.logger.warn(
+        `[DocumentAiExtractor] Error al parsear JSON retornado por Gemini: ${err?.message}. Raw: ${raw.slice(0, 300)}`,
+      );
+      return {};
+    }
   }
 
   private async callPythonOcrService(
@@ -336,44 +556,63 @@ export class DocumentAiExtractorService implements OnModuleInit {
     originalFileName: string,
     ocrBaseUrl: string,
   ): Promise<UniversalDocumentExtractionResult | null> {
-    const endpoint = `${ocrBaseUrl.replace(/\/+$/, '')}/extract`;
-    this.logger.log(
-      `[DocumentAiExtractor] Delegando OCR al microservicio Python en ${endpoint} para '${originalFileName}'...`,
-    );
-
-    const formData = new FormData();
-    const blob = new Blob([new Uint8Array(fileBuffer)], { type: 'application/pdf' });
-    formData.append('file', blob, originalFileName);
-    formData.append('original_name', originalFileName);
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60000);
-
-    try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        body: formData,
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Microservicio Python retornó status ${response.status}: ${errorText}`);
-      }
-
-      const data = await response.json();
-      this.logger.log(
-        `[DocumentAiExtractor] ✅ OCR completado exitosamente por Python para '${originalFileName}' (motor=${data.extractionEngine || data.extraction_engine || 'python_ocr'})`,
-      );
-      return this.mapPythonResponseToResult(data, originalFileName);
-    } catch (err: any) {
-      this.logger.warn(
-        `[DocumentAiExtractor] No se pudo obtener respuesta del microservicio Python: ${err?.message}`,
-      );
-      return null;
-    } finally {
-      clearTimeout(timeout);
+    const candidateUrls = [ocrBaseUrl];
+    if (ocrBaseUrl.includes('ocr:8000') && !candidateUrls.includes('http://localhost:8000')) {
+      candidateUrls.push('http://localhost:8000');
     }
+
+    for (const currentBase of candidateUrls) {
+      const endpoint = `${currentBase.replace(/\/+$/, '')}/extract`;
+      const formData = new FormData();
+      const blob = new Blob([new Uint8Array(fileBuffer)], { type: 'application/pdf' });
+      formData.append('file', blob, originalFileName);
+      formData.append('original_name', originalFileName);
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 60000);
+
+      try {
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          body: formData,
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Microservicio Python retornó status ${response.status}: ${errorText}`);
+        }
+
+        const data = await response.json();
+        const rawTextLength = (data.rawText || data.raw_text || '').length;
+        const engineName = data.extractionEngine || data.extraction_engine || 'PyMuPDF + Tesseract OCR';
+        const pages = data.pageCount || data.page_count || 1;
+
+        console.log(
+          `\n${ANSI_GREEN}${ANSI_BOLD}========================================================================${ANSI_RESET}` +
+          `\n${ANSI_GREEN}${ANSI_BOLD}✔ [OCR PYTHON EXITOSO]${ANSI_RESET} ${ANSI_GREEN}Texto extraído correctamente de '${originalFileName}'${ANSI_RESET}` +
+          `\n${ANSI_GREEN}  • Motor OCR: ${engineName}` +
+          `\n${ANSI_GREEN}  • Páginas: ${pages} | Caracteres de texto obtenidos: ${rawTextLength.toLocaleString('es-AR')}${ANSI_RESET}` +
+          `\n${ANSI_GREEN}${ANSI_BOLD}========================================================================${ANSI_RESET}\n`
+        );
+
+        this.logger.log(
+          `[DocumentAiExtractor] ✅ OCR completado exitosamente por Python para '${originalFileName}' (${rawTextLength} chars, ${pages} págs)`,
+        );
+        return this.mapPythonResponseToResult(data, originalFileName);
+      } catch (err: any) {
+        const isLast = candidateUrls.indexOf(currentBase) === candidateUrls.length - 1;
+        if (isLast) {
+          this.logger.warn(
+            `[DocumentAiExtractor] Microservicio Python no disponible en ${endpoint} (${err?.message}). Continuando automáticamente con extracción nativa local (pdf-parse) y estructuración Gemini.`,
+          );
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    return null;
   }
 
   private mapPythonResponseToResult(
@@ -392,32 +631,32 @@ export class DocumentAiExtractorService implements OnModuleInit {
       codigo: it.codigo || it.code || null,
       nombre: it.nombre || it.descripcion || it.description || `Ítem #${idx + 1}`,
       cantidad:
-        typeof it.cantidad === 'number'
-          ? it.cantidad
-          : typeof it.quantity === 'number'
-            ? it.quantity
+        it.cantidad !== null && it.cantidad !== undefined && !isNaN(Number(it.cantidad))
+          ? Number(it.cantidad)
+          : it.quantity !== null && it.quantity !== undefined && !isNaN(Number(it.quantity))
+            ? Number(it.quantity)
             : 1,
       precioSinIva:
-        typeof it.precioSinIva === 'number'
-          ? it.precioSinIva
-          : typeof it.precio_sin_iva === 'number'
-            ? it.precio_sin_iva
-            : typeof it.unitPrice === 'number'
-              ? it.unitPrice
+        it.precioSinIva !== null && it.precioSinIva !== undefined && !isNaN(Number(it.precioSinIva))
+          ? Number(it.precioSinIva)
+          : it.precio_sin_iva !== null && it.precio_sin_iva !== undefined && !isNaN(Number(it.precio_sin_iva))
+            ? Number(it.precio_sin_iva)
+            : it.unitPrice !== null && it.unitPrice !== undefined && !isNaN(Number(it.unitPrice))
+              ? Number(it.unitPrice)
               : null,
       precioFinal:
-        typeof it.precioFinal === 'number'
-          ? it.precioFinal
-          : typeof it.precio_final === 'number'
-            ? it.precio_final
-            : typeof it.subtotal === 'number'
-              ? it.subtotal
+        it.precioFinal !== null && it.precioFinal !== undefined && !isNaN(Number(it.precioFinal))
+          ? Number(it.precioFinal)
+          : it.precio_final !== null && it.precio_final !== undefined && !isNaN(Number(it.precio_final))
+            ? Number(it.precio_final)
+            : it.subtotal !== null && it.subtotal !== undefined && !isNaN(Number(it.subtotal))
+              ? Number(it.subtotal)
               : null,
       ivaPorcentaje:
-        typeof it.ivaPorcentaje === 'number'
-          ? it.ivaPorcentaje
-          : typeof it.iva_porcentaje === 'number'
-            ? it.iva_porcentaje
+        it.ivaPorcentaje !== null && it.ivaPorcentaje !== undefined && !isNaN(Number(it.ivaPorcentaje))
+          ? Number(it.ivaPorcentaje)
+          : it.iva_porcentaje !== null && it.iva_porcentaje !== undefined && !isNaN(Number(it.iva_porcentaje))
+            ? Number(it.iva_porcentaje)
             : null,
     }));
 
@@ -459,9 +698,16 @@ export class DocumentAiExtractorService implements OnModuleInit {
       referenceNumber: data.referenceNumber || data.reference_number || null,
       cae: data.cae || null,
       taxCondition: data.taxCondition || data.tax_condition || null,
-      equipmentId: data.equipmentId || data.equipment_id || null,
-      equipmentModel: data.equipmentModel || data.equipment_model || null,
-      meterCount: data.meterCount || data.meter_count || null,
+      documentLetter: data.documentLetter || data.document_letter || null,
+      pointOfSale: data.pointOfSale || data.point_of_sale || null,
+      caeDueDate: data.caeDueDate || data.cae_due_date || null,
+      purchaseOrderNumber: data.purchaseOrderNumber || data.purchase_order_number || null,
+      exemptAmount: typeof data.exemptAmount === 'number' ? data.exemptAmount : null,
+      otherTaxesAmount: typeof data.otherTaxesAmount === 'number' ? data.otherTaxesAmount : null,
+      carrierName: data.carrierName || data.carrier_name || null,
+      department: data.department || null,
+      branch: data.branch || null,
+      period: data.period || null,
       tags: Array.isArray(data.tags) ? data.tags : [],
       items,
       extractedData: {

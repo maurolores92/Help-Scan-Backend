@@ -140,9 +140,16 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
         referenceNumber: extraction.referenceNumber,
         cae: extraction.cae,
         taxCondition: extraction.taxCondition,
-        equipmentId: extraction.equipmentId,
-        equipmentModel: extraction.equipmentModel,
-        meterCount: extraction.meterCount,
+        documentLetter: extraction.documentLetter,
+        pointOfSale: extraction.pointOfSale,
+        caeDueDate: extraction.caeDueDate,
+        purchaseOrderNumber: extraction.purchaseOrderNumber,
+        exemptAmount: extraction.exemptAmount,
+        otherTaxesAmount: extraction.otherTaxesAmount,
+        carrierName: extraction.carrierName,
+        department: extraction.department,
+        branch: extraction.branch,
+        period: extraction.period,
         tags: extraction.tags,
         items: (extraction as any).items || extraction.extractedData?.items || [],
         extractedData: extraction.extractedData,
@@ -153,6 +160,10 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
         processedAt: new Date(),
         errorMessage: null,
       });
+
+      console.log(
+        `\x1b[92m\x1b[1m✔ [GUARDADO EXITOSO] Documento #${doc.id} ('${doc.originalName}') actualizado en base de datos (Estado: ${nextStatus})\x1b[0m`
+      );
 
       // Contabiliza el documento procesado en `aiDocumentsProcessed` sin gastar `maxAiQueriesMonthly`
       await this.tenantQuotasService.recordDocumentAiProcessing(doc.companyId, {

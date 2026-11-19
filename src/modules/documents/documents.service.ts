@@ -209,7 +209,7 @@ export class DocumentsService {
   async getFacets(companyId: number) {
     const scopedCompanyId = this.assertValidCompanyScope(companyId);
 
-    const [typeRows, statusRows, equipmentRows] = await Promise.all([
+    const [typeRows, statusRows, departmentRows] = await Promise.all([
       this.documentModel.findAll({
         attributes: ['documentType', [fn('COUNT', col('id')), 'count']],
         where: { companyId: scopedCompanyId, documentType: { [Op.ne]: null } },
@@ -226,13 +226,13 @@ export class DocumentsService {
       }) as unknown as Promise<Array<{ status: string; count: string | number }>>,
 
       this.documentModel.findAll({
-        attributes: ['equipmentId', [fn('COUNT', col('id')), 'count']],
-        where: { companyId: scopedCompanyId, equipmentId: { [Op.ne]: null } },
-        group: ['equipmentId'],
+        attributes: ['department', [fn('COUNT', col('id')), 'count']],
+        where: { companyId: scopedCompanyId, department: { [Op.ne]: null } },
+        group: ['department'],
         order: [[fn('COUNT', col('id')), 'DESC']],
         limit: 15,
         raw: true,
-      }) as unknown as Promise<Array<{ equipmentId: string; count: string | number }>>,
+      }) as unknown as Promise<Array<{ department: string; count: string | number }>>,
     ]);
 
     return {
@@ -242,9 +242,9 @@ export class DocumentsService {
       statuses: statusRows
         .filter((r) => Boolean(r.status))
         .map((r) => ({ value: r.status, count: Number(r.count) })),
-      equipmentIds: equipmentRows
-        .filter((r) => Boolean(r.equipmentId))
-        .map((r) => ({ value: r.equipmentId, count: Number(r.count) })),
+      departments: departmentRows
+        .filter((r) => Boolean(r.department))
+        .map((r) => ({ value: r.department, count: Number(r.count) })),
     };
   }
 
@@ -283,9 +283,16 @@ export class DocumentsService {
     if (dto.referenceNumber !== undefined) updatePayload.referenceNumber = dto.referenceNumber;
     if (dto.cae !== undefined) updatePayload.cae = dto.cae;
     if (dto.taxCondition !== undefined) updatePayload.taxCondition = dto.taxCondition;
-    if (dto.equipmentId !== undefined) updatePayload.equipmentId = dto.equipmentId;
-    if (dto.equipmentModel !== undefined) updatePayload.equipmentModel = dto.equipmentModel;
-    if (dto.meterCount !== undefined) updatePayload.meterCount = dto.meterCount;
+    if (dto.documentLetter !== undefined) updatePayload.documentLetter = dto.documentLetter;
+    if (dto.pointOfSale !== undefined) updatePayload.pointOfSale = dto.pointOfSale;
+    if (dto.caeDueDate !== undefined) updatePayload.caeDueDate = dto.caeDueDate;
+    if (dto.purchaseOrderNumber !== undefined) updatePayload.purchaseOrderNumber = dto.purchaseOrderNumber;
+    if (dto.exemptAmount !== undefined) updatePayload.exemptAmount = dto.exemptAmount;
+    if (dto.otherTaxesAmount !== undefined) updatePayload.otherTaxesAmount = dto.otherTaxesAmount;
+    if (dto.carrierName !== undefined) updatePayload.carrierName = dto.carrierName;
+    if (dto.department !== undefined) updatePayload.department = dto.department;
+    if (dto.branch !== undefined) updatePayload.branch = dto.branch;
+    if (dto.period !== undefined) updatePayload.period = dto.period;
     if (dto.summary !== undefined) updatePayload.summary = dto.summary;
     if (dto.tags !== undefined) updatePayload.tags = dto.tags;
     if (dto.validationNotes !== undefined) updatePayload.validationNotes = dto.validationNotes;
@@ -483,6 +490,61 @@ export class DocumentsService {
     return {
       success: true,
       message: `Documento '${doc.originalName}' eliminado correctamente`,
+    };
+  }
+
+  async bulkRemove(ids: number[], companyId: number, actorUserId?: number) {
+    const scopedCompanyId = this.assertValidCompanyScope(companyId);
+    if (!ids || ids.length === 0) {
+      return {
+        success: true,
+        count: 0,
+        message: 'No se enviaron documentos para eliminar',
+      };
+    }
+
+    const docs = await this.documentModel.findAll({
+      where: {
+        id: ids,
+        companyId: scopedCompanyId,
+      },
+    });
+
+    let deletedCount = 0;
+    const deletedNames: string[] = [];
+
+    for (const doc of docs) {
+      const fullPath = resolveSafeStorageFilePath(doc.filePath, doc.companyId, doc.fileName);
+      if (existsSync(fullPath)) {
+        try {
+          unlinkSync(fullPath);
+        } catch (err: any) {
+          this.logger.warn(`No se pudo eliminar el archivo físico ${fullPath}: ${err.message}`);
+        }
+      }
+
+      await doc.destroy();
+      deletedCount++;
+      if (deletedNames.length < 5) {
+        deletedNames.push(doc.originalName);
+      }
+    }
+
+    if (deletedCount > 0) {
+      await this.auditService.log({
+        action: AuditAction.DELETE,
+        entity: 'Document',
+        entityId: ids[0],
+        companyId: scopedCompanyId,
+        userId: actorUserId,
+        description: `Se eliminaron en lote ${deletedCount} documentos PDF: [${deletedNames.join(', ')}${deletedCount > 5 ? ` y ${deletedCount - 5} más` : ''}]`,
+      });
+    }
+
+    return {
+      success: true,
+      count: deletedCount,
+      message: `Se eliminaron ${deletedCount} documento(s) correctamente`,
     };
   }
 }

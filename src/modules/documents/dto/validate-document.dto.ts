@@ -114,18 +114,52 @@ export class ValidateDocumentDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(5)
+  documentLetter?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10)
+  pointOfSale?: string;
+
+  @IsOptional()
+  @IsString()
+  caeDueDate?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  purchaseOrderNumber?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  exemptAmount?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  otherTaxesAmount?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  carrierName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  department?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  branch?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(50)
-  equipmentId?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(100)
-  equipmentModel?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(100)
-  meterCount?: string;
+  period?: string;
 
   @IsOptional()
   @IsString()

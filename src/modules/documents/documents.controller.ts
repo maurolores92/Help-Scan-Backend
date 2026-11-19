@@ -23,6 +23,7 @@ import { DocumentsService } from './documents.service';
 import { QueryDocumentDto } from './dto/query-document.dto';
 import { ValidateDocumentDto } from './dto/validate-document.dto';
 import { RejectDocumentDto } from './dto/reject-document.dto';
+import { BulkDeleteDocumentsDto } from './dto/bulk-delete-documents.dto';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequirePermission } from '../auth/decorators/require-permission.decorator';
@@ -168,6 +169,13 @@ export class DocumentsController {
     });
 
     stream.pipe(res);
+  }
+
+  @Post('bulk-delete')
+  @RequirePermission('DELETE_DOCUMENT')
+  bulkRemove(@Body() dto: BulkDeleteDocumentsDto, @GetUser() user: any) {
+    const tenantCompanyId = this.assertTenantCompany(user);
+    return this.documentsService.bulkRemove(dto.ids, tenantCompanyId, user.id);
   }
 
   @Delete(':id')

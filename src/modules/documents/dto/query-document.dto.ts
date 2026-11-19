@@ -29,11 +29,15 @@ export class QueryDocumentDto {
 
   @IsOptional()
   @IsString()
-  equipmentId?: string;
+  purchaseOrderNumber?: string;
 
   @IsOptional()
   @IsString()
-  equipmentModel?: string;
+  department?: string;
+
+  @IsOptional()
+  @IsString()
+  documentLetter?: string;
 
   @IsOptional()
   @IsString()

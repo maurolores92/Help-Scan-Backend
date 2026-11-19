@@ -267,7 +267,7 @@ describe('DocumentsService', () => {
     const result = await service.validateDocument(99, 2, 5, {
       documentType: 'factura',
       totalAmount: 47819.20,
-      equipmentId: '7016',
+      purchaseOrderNumber: 'OC-7016',
       cae: '86406410012207',
     });
 
@@ -278,7 +278,7 @@ describe('DocumentsService', () => {
         validatedByUserId: 5,
         documentType: 'factura',
         totalAmount: 47819.20,
-        equipmentId: '7016',
+        purchaseOrderNumber: 'OC-7016',
         cae: '86406410012207',
       }),
     );
