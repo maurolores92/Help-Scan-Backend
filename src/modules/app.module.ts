@@ -1,6 +1,7 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD } from '@nestjs/core';
 import { CacheModule } from '@nestjs/cache-manager';
 
@@ -19,10 +20,12 @@ import { CompaniesModule } from './companies/companies.module';
 import { PlansModule } from './plans/plans.module';
 import { DocumentsModule } from './documents/documents.module';
 import { FtpDevicesModule } from './ftp-devices/ftp-devices.module';
+import { ChannelsModule } from './channels/channels.module';
 
 @Module({
   imports: [
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
+    ScheduleModule.forRoot(),
     ConfigModule.forRoot({ load: [DBConfig] }),
     CacheModule.register({
       isGlobal: true,
@@ -37,6 +40,7 @@ import { FtpDevicesModule } from './ftp-devices/ftp-devices.module';
     UsersModule,
     DocumentsModule,
     FtpDevicesModule,
+    ChannelsModule,
     AuthModule,
     SeedModule,
     UploadsModule,

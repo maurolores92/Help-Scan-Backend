@@ -44,6 +44,8 @@ const TENANT_PRIVATE_ENTITIES_FOR_SUPERADMIN = [
   'Document',
   'documents',
   'document',
+  'CompanyEmailChannel',
+  'EmailMessage',
   'Role',
   'roles',
   'role',

@@ -126,6 +126,24 @@ export const permissionsData = [
     description: 'Permite crear, editar, suspender y consultar credenciales de acceso FTP/SFTP/FTPS para equipos HP',
     categoria: CategoriaPermiso.DOCUMENTS,
   },
+  {
+    name: 'VIEW_CHANNELS',
+    displayName: 'Ver Canales de Ingesta',
+    description: 'Permite visualizar el estado y configuración de canales de ingreso automático (Correo, WhatsApp, Telegram)',
+    categoria: CategoriaPermiso.DOCUMENTS,
+  },
+  {
+    name: 'MANAGE_CHANNELS',
+    displayName: 'Configurar Canales de Ingesta',
+    description: 'Permite conectar, probar y administrar casillas IMAP y canales externos de ingesta de documentos',
+    categoria: CategoriaPermiso.DOCUMENTS,
+  },
+  {
+    name: 'VIEW_EMAIL_INBOX',
+    displayName: 'Ver Buzón de Correos Recibidos',
+    description: 'Permite auditar los correos electrónicos recibidos, leer su contenido y rescatar manualmente documentos omitidos',
+    categoria: CategoriaPermiso.DOCUMENTS,
+  },
 
   // ==========================================
   // AUDITORÍA

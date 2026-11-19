@@ -25,6 +25,7 @@ import { Company } from '../companies/company.model';
 import { TenantQuotasService } from '../plans/services/tenant-quotas.service';
 import {
   assertValidPdfUpload,
+  isValidPdfBufferHeader,
   prepareTenantPdfStorageTarget,
 } from './helpers/document-storage.helper';
 import { buildDocumentSearchWhere } from './helpers/document-search.helper';
@@ -199,6 +200,129 @@ export class DocumentsService {
       documents: uploaded,
       errors,
     };
+  }
+
+  /**
+   * Ingesta unificado de buffers PDF provenientes de canales automáticos
+   * (Correo electrónico IMAP, WhatsApp, Telegram) hacia la bóveda cifrada del VPS.
+   */
+  async ingestPdfFromChannel(params: {
+    companyId: number;
+    buffer: Buffer;
+    originalName: string;
+    mimeType?: string;
+    source: DocumentSource;
+    sourceEmailId?: number | null;
+    actorUserId?: number | null;
+    channelContextLabel?: string;
+  }): Promise<{ document: Document; isDuplicate: boolean }> {
+    const companyId = this.assertValidCompanyScope(params.companyId);
+
+    if (!isValidPdfBufferHeader(params.buffer)) {
+      throw new BadRequestException(
+        `El archivo '${params.originalName}' no posee una cabecera PDF válida (%PDF-).`,
+      );
+    }
+
+    const fakeMulterFile = {
+      originalname: params.originalName,
+      mimetype: params.mimeType || 'application/pdf',
+      buffer: params.buffer,
+      size: params.buffer.length,
+    } as Express.Multer.File;
+
+    return this.uploadQueue.enqueue(
+      {
+        companyId,
+        userId: params.actorUserId || 0,
+        fileName: params.originalName,
+        source:
+          params.source === DocumentSource.EMAIL
+            ? 'email'
+            : params.source === DocumentSource.WHATSAPP
+              ? 'whatsapp'
+              : params.source === DocumentSource.TELEGRAM
+                ? 'telegram'
+                : 'sync',
+      },
+      async () => {
+        const target = prepareTenantPdfStorageTarget(companyId, fakeMulterFile);
+
+        const existing = await this.documentModel.findOne({
+          where: { companyId, fileHash: target.fileHash },
+        });
+        if (existing) {
+          return { document: existing, isDuplicate: true };
+        }
+
+        let pageCount = 1;
+        try {
+          const parsed = await pdfParse(params.buffer);
+          pageCount = Math.max(1, Number(parsed?.numpages || 1));
+        } catch {
+          pageCount = 1;
+        }
+
+        await this.tenantQuotasService.assertCanStoreDocument(
+          companyId,
+          params.buffer.length,
+          pageCount,
+        );
+
+        writeEncryptedVaultFile(target.fullPhysicalPath, params.buffer, companyId);
+
+        const document = await this.documentModel.create({
+          companyId,
+          userId: params.actorUserId ?? null,
+          originalName: params.originalName,
+          fileName: target.physicalFileName,
+          filePath: target.relativePath,
+          fileSize: params.buffer.length,
+          mimeType: params.mimeType || 'application/pdf',
+          pageCount,
+          source: params.source,
+          sourceEmailId: params.sourceEmailId ?? null,
+          status: DocumentStatus.PENDING,
+          fileHash: target.fileHash,
+        } as never);
+
+        await this.tenantQuotasService.recordPagesUploaded(companyId, pageCount);
+
+        await this.auditService.log({
+          action: AuditAction.UPLOAD,
+          entity: 'Document',
+          entityId: document.id,
+          companyId,
+          userId: params.actorUserId ?? undefined,
+          payload: {
+            documentId: document.id,
+            fileName: document.fileName,
+            filePath: document.filePath,
+            size: document.fileSize,
+            source: document.source,
+            sourceEmailId: params.sourceEmailId ?? null,
+            context: params.channelContextLabel || null,
+          },
+          description: `Se ingresó '${document.originalName}' vía ${params.source}${params.channelContextLabel ? ` (${params.channelContextLabel})` : ''}`,
+        });
+
+        await this.notificationsService.dispatch({
+          type: params.source === DocumentSource.EMAIL ? 'channel.email_received' : 'document.uploaded',
+          title:
+            params.source === DocumentSource.EMAIL
+              ? '📬 Documento recibido por Correo'
+              : '📄 Documento ingresado',
+          body: `Se recibió '${document.originalName}'${params.channelContextLabel ? ` (${params.channelContextLabel})` : ''} y comenzó la extracción automática con IA`,
+          companyId,
+          actorUser: params.actorUserId ? { id: params.actorUserId } : null,
+          extraData: { documentId: document.id, link: '/documents' },
+        });
+
+        this.processingQueue.enqueue(document.id, params.actorUserId ?? undefined);
+
+        return { document, isDuplicate: false };
+      },
+    );
   }
 
   async scanFtpFolder(companyId: number, actorUserId?: number) {

@@ -14,6 +14,9 @@ import { Users } from '../users/users.model';
 export enum DocumentSource {
   APP_UPLOAD = 'APP_UPLOAD',
   FTP = 'FTP',
+  EMAIL = 'EMAIL',
+  WHATSAPP = 'WHATSAPP',
+  TELEGRAM = 'TELEGRAM',
 }
 
 export enum DocumentStatus {
@@ -103,6 +106,13 @@ export class Document extends Model {
     defaultValue: DocumentSource.APP_UPLOAD,
   })
   declare source: DocumentSource;
+
+  @Column({
+    type: DataType.INTEGER,
+    allowNull: true,
+    field: 'source_email_id',
+  })
+  declare sourceEmailId: number | null;
 
   @Column({
     type: DataType.STRING(20),

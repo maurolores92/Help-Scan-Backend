@@ -1,11 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 
+export type UploadQueueSource = 'web' | 'ftp' | 'sync' | 'email' | 'whatsapp' | 'telegram';
+
 export interface UploadQueueJobMetadata {
   jobId: string;
   companyId: number;
   userId?: number | null;
   fileName: string;
-  source: 'web' | 'ftp' | 'sync';
+  source: UploadQueueSource;
   enqueuedAt: Date;
 }
 
@@ -47,7 +49,7 @@ export class DocumentUploadQueueService {
       companyId: number;
       userId?: number | null;
       fileName: string;
-      source?: 'web' | 'ftp' | 'sync';
+      source?: UploadQueueSource;
     },
     task: () => Promise<T>,
   ): Promise<T> {

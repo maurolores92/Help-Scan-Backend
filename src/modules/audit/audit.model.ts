@@ -49,6 +49,8 @@ export const EntityLabel: Record<string, string> = {
   NotificationPreference: 'preferencia de notificación',
   Document: 'documento',
   FtpDevice: 'equipo HP / acceso FTP',
+  CompanyEmailChannel: 'canal de correo electrónico (IMAP)',
+  EmailMessage: 'correo electrónico recibido',
   AuditLog: 'registro de auditoría',
 };
 

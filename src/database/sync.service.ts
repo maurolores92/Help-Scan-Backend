@@ -33,6 +33,8 @@ export class SyncService implements OnModuleInit {
       'NotificationPreference',
       'PushSubscription',
       'Document',
+      'CompanyEmailChannel',
+      'EmailMessage',
     ];
 
     if (isForceSync) {
@@ -160,6 +162,7 @@ export class SyncService implements OnModuleInit {
       `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "validated_by_user_id" INTEGER DEFAULT NULL;`,
       `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "validated_at" TIMESTAMP WITH TIME ZONE DEFAULT NULL;`,
       `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "validation_notes" TEXT DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "source_email_id" INTEGER DEFAULT NULL;`,
     ];
 
     for (const sql of statements) {
@@ -191,6 +194,10 @@ export class SyncService implements OnModuleInit {
       { table: 'documents', name: 'idx_documents_due_date', column: 'due_date' },
       { table: 'ftp_devices', name: 'idx_ftp_devices_company_id', column: 'company_id' },
       { table: 'ftp_devices', name: 'idx_ftp_devices_status', column: 'status' },
+      { table: 'company_email_channels', name: 'idx_email_channels_company_id', column: 'company_id' },
+      { table: 'email_messages', name: 'idx_email_messages_company_id', column: 'company_id' },
+      { table: 'email_messages', name: 'idx_email_messages_status', column: 'status' },
+      { table: 'email_messages', name: 'idx_email_messages_message_id', column: 'message_id' },
     ];
 
     for (const idx of singleColumnIndexes) {

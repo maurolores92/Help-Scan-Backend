@@ -79,6 +79,26 @@ export const NOTIFICATION_REGISTRY: Record<string, NotificationDefinition> = {
     defaultInApp: true,
     defaultRecipients: ['company_admin'],
   },
+  'channel.email_configured': {
+    key: 'channel.email_configured',
+    category: NotificationCategory.DOCUMENTS,
+    label: 'Canal de correo IMAP configurado',
+    description: 'Cuando se configura, actualiza o activa el buzón de ingesta automática por correo electrónico',
+    icon: 'tabler:mail-cog',
+    emoji: '📧',
+    defaultInApp: true,
+    defaultRecipients: ['company_admin'],
+  },
+  'channel.email_received': {
+    key: 'channel.email_received',
+    category: NotificationCategory.DOCUMENTS,
+    label: 'Comprobante ingresado por correo',
+    description: 'Cuando el sincronizador IMAP descarga o genera un documento PDF desde un correo recibido',
+    icon: 'tabler:mail-check',
+    emoji: '📬',
+    defaultInApp: true,
+    defaultRecipients: ['company_admin', 'company_users'],
+  },
 
   // ── 2. Compañías / Tenants & Planes (Plataforma y Límites) ────────────────
   'system.company_created': {
