@@ -144,6 +144,12 @@ export const permissionsData = [
     description: 'Permite auditar los correos electrónicos recibidos, leer su contenido y rescatar manualmente documentos omitidos',
     categoria: CategoriaPermiso.DOCUMENTS,
   },
+  {
+    name: 'VIEW_WHATSAPP_INBOX',
+    displayName: 'Ver Mensajes de WhatsApp Recibidos',
+    description: 'Permite auditar los comprobantes, fotos y mensajes recibidos vía WhatsApp Business',
+    categoria: CategoriaPermiso.DOCUMENTS,
+  },
 
   // ==========================================
   // AUDITORÍA

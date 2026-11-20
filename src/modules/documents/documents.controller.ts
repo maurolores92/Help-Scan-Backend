@@ -94,6 +94,7 @@ export class DocumentsController {
   }
 
   @Post('sync-ftp')
+  @RequireTenantModule('sftp')
   @RequirePermission('UPLOAD_DOCUMENT')
   syncFtp(@GetUser() user: any) {
     const tenantCompanyId = this.assertTenantCompany(user);

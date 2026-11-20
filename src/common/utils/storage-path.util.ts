@@ -241,6 +241,17 @@ export function getTenantQuarantinePath(companyId: number | string): string {
 }
 
 /**
+ * Retorna la carpeta persistente donde se almacenan las credenciales de sesión Baileys (WhatsApp QR)
+ * aislada por compañía dentro del volumen persistente `uploads/tenancy/`.
+ */
+export function getTenantWhatsappSessionPath(companyId: number | string): string {
+  const { baseDir } = ensureTenantDirectories(companyId);
+  const sessionDir = join(baseDir, 'whatsapp_session');
+  safeEnsureDir(sessionDir);
+  return sessionDir;
+}
+
+/**
  * Prepara la carpeta mensual dentro de la bóveda (`vault/YYYY/MM`) y retorna ruta absoluta y relativa.
  */
 export function getTenantVaultMonthlyPath(

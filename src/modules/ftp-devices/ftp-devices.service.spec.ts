@@ -62,7 +62,7 @@ describe('FtpDevicesService (HP E52645 / SFTPGo)', () => {
         id: 5,
         name: 'Imprenta Sur',
         status: CompanyStatus.ACTIVE,
-        enabledModules: ['documents'],
+        enabledModules: ['documents', 'sftp'],
       }),
     };
 

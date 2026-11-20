@@ -35,6 +35,8 @@ export class SyncService implements OnModuleInit {
       'Document',
       'CompanyEmailChannel',
       'EmailMessage',
+      'CompanyWhatsappChannel',
+      'WhatsappMessage',
     ];
 
     if (isForceSync) {
@@ -61,6 +63,7 @@ export class SyncService implements OnModuleInit {
 
     await this.ensurePlanSchemaColumns();
     await this.ensureDocumentSchemaColumns();
+    await this.ensureWhatsappSchemaColumns();
     await this.ensureIndexes();
 
     try {
@@ -172,6 +175,34 @@ export class SyncService implements OnModuleInit {
     }
   }
 
+  private async ensureWhatsappSchemaColumns() {
+    const statements = [
+      `DROP INDEX IF EXISTS "idx_whatsapp_channels_phone_number_id";`,
+      `ALTER TABLE "company_whatsapp_channels" DROP COLUMN IF EXISTS "phone_number_id";`,
+      `ALTER TABLE "company_whatsapp_channels" DROP COLUMN IF EXISTS "waba_id";`,
+      `ALTER TABLE "company_whatsapp_channels" DROP COLUMN IF EXISTS "display_phone_number";`,
+      `ALTER TABLE "company_whatsapp_channels" DROP COLUMN IF EXISTS "verified_name";`,
+      `ALTER TABLE "company_whatsapp_channels" DROP COLUMN IF EXISTS "encrypted_access_token";`,
+      `ALTER TABLE "company_whatsapp_channels" DROP COLUMN IF EXISTS "encrypted_app_secret";`,
+      `ALTER TABLE "company_whatsapp_channels" DROP COLUMN IF EXISTS "verify_token";`,
+      `ALTER TABLE "company_whatsapp_channels" DROP COLUMN IF EXISTS "last_webhook_at";`,
+      `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "session_key" VARCHAR(80) DEFAULT '';`,
+      `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "connection_status" VARCHAR(30) NOT NULL DEFAULT 'DISCONNECTED';`,
+      `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "connected_phone" VARCHAR(40) DEFAULT NULL;`,
+      `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "connected_name" VARCHAR(150) DEFAULT NULL;`,
+      `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "ignore_groups" BOOLEAN NOT NULL DEFAULT TRUE;`,
+      `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "last_qr_at" TIMESTAMP WITH TIME ZONE DEFAULT NULL;`,
+      `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "last_message_at" TIMESTAMP WITH TIME ZONE DEFAULT NULL;`,
+      `ALTER TABLE "whatsapp_messages" ADD COLUMN IF NOT EXISTS "reply_jid" VARCHAR(120) DEFAULT NULL;`,
+    ];
+
+    for (const sql of statements) {
+      try {
+        await this.sequelize.query(sql);
+      } catch { }
+    }
+  }
+
   private async ensureIndexes() {
     const singleColumnIndexes = [
       { table: 'plans', name: 'idx_plans_slug', column: 'slug' },
@@ -198,6 +229,10 @@ export class SyncService implements OnModuleInit {
       { table: 'email_messages', name: 'idx_email_messages_company_id', column: 'company_id' },
       { table: 'email_messages', name: 'idx_email_messages_status', column: 'status' },
       { table: 'email_messages', name: 'idx_email_messages_message_id', column: 'message_id' },
+      { table: 'company_whatsapp_channels', name: 'idx_whatsapp_channels_company_id', column: 'company_id' },
+      { table: 'whatsapp_messages', name: 'idx_whatsapp_messages_company_id', column: 'company_id' },
+      { table: 'whatsapp_messages', name: 'idx_whatsapp_messages_status', column: 'status' },
+      { table: 'whatsapp_messages', name: 'idx_whatsapp_messages_external_id', column: 'external_message_id' },
     ];
 
     for (const idx of singleColumnIndexes) {

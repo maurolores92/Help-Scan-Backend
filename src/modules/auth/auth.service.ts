@@ -37,7 +37,13 @@ export class AuthService {
     }
 
     // Validación multitenancy: estado de la compañía
-    let companyData: { id: number; name: string; slug: string; planId?: number | null } | null = null;
+    let companyData: {
+      id: number;
+      name: string;
+      slug: string;
+      planId?: number | null;
+      enabledModules?: string[];
+    } | null = null;
     if (user.companyId) {
       const company = await Company.findByPk(user.companyId);
       if (!company) {
@@ -64,6 +70,7 @@ export class AuthService {
         name: company.name,
         slug: company.slug,
         planId: company.planId ?? null,
+        enabledModules: Array.isArray(company.enabledModules) ? company.enabledModules : [],
       };
     }
 

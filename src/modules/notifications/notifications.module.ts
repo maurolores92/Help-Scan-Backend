@@ -30,6 +30,7 @@ import { PushNotificationsService } from './services/push-notifications.service'
   ],
   exports: [
     NotificationsService,
+    NotificationsGateway,
     NotificationRecipientsService,
     NotificationPreferencesService,
     PushNotificationsService,

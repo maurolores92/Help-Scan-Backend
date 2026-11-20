@@ -17,6 +17,8 @@ interface QueuedDocumentJob {
 // Extracción y análisis OCR/IA estrictamente de 1 en 1 para proteger CPU y RAM
 const MAX_CONCURRENT_EXTRACTIONS = 1;
 
+export type DocumentPostProcessHook = (doc: Document) => Promise<void> | void;
+
 /**
  * Cola asíncrona controlada para procesar la extracción OCR/IA de PDFs
  * sin saturar la memoria ni el CPU del servidor ante ráfagas de escaneos SFTP.
@@ -26,7 +28,12 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
   private readonly logger = new Logger(DocumentProcessingQueueService.name);
   private readonly queue: QueuedDocumentJob[] = [];
   private readonly enqueuedIds = new Set<number>();
+  private readonly postProcessHooks: DocumentPostProcessHook[] = [];
   private activeWorkers = 0;
+
+  registerPostProcessHook(hook: DocumentPostProcessHook): void {
+    this.postProcessHooks.push(hook);
+  }
 
   constructor(
     @InjectModel(Document)
@@ -206,6 +213,16 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
           link: '/documents',
         },
       });
+
+      for (const hook of this.postProcessHooks) {
+        try {
+          await hook(doc);
+        } catch (hookErr: any) {
+          this.logger.warn(
+            `Error en hook post-proceso para documento #${doc.id}: ${hookErr?.message}`,
+          );
+        }
+      }
 
       return doc;
     } catch (error: any) {

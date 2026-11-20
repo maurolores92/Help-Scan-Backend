@@ -11,7 +11,9 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { getUploadsRootPath } from './common/utils/upload-path.util';
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+  });
 
   app.setGlobalPrefix('api');
 

@@ -99,6 +99,26 @@ export const NOTIFICATION_REGISTRY: Record<string, NotificationDefinition> = {
     defaultInApp: true,
     defaultRecipients: ['company_admin', 'company_users'],
   },
+  'channel.whatsapp_configured': {
+    key: 'channel.whatsapp_configured',
+    category: NotificationCategory.DOCUMENTS,
+    label: 'Canal de WhatsApp configurado',
+    description: 'Cuando se configura o actualiza la conexión con WhatsApp Cloud API',
+    icon: 'tabler:brand-whatsapp',
+    emoji: '💬',
+    defaultInApp: true,
+    defaultRecipients: ['company_admin'],
+  },
+  'channel.whatsapp_received': {
+    key: 'channel.whatsapp_received',
+    category: NotificationCategory.DOCUMENTS,
+    label: 'Comprobante ingresado por WhatsApp',
+    description: 'Cuando llega un PDF o imagen de comprobante por WhatsApp Business',
+    icon: 'tabler:brand-whatsapp',
+    emoji: '📲',
+    defaultInApp: true,
+    defaultRecipients: ['company_admin', 'company_users'],
+  },
 
   // ── 2. Compañías / Tenants & Planes (Plataforma y Límites) ────────────────
   'system.company_created': {

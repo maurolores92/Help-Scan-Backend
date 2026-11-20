@@ -14,6 +14,8 @@ export const DEFAULT_PLAN_MODULES = [
   'roles',
   'audit',
   'notifications',
+  'sftp',
+  'email',
 ];
 
 @Table({

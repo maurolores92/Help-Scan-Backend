@@ -28,6 +28,8 @@ export const DEFAULT_ENABLED_MODULES = [
   'users',
   'roles',
   'audit',
+  'sftp',
+  'email',
 ];
 
 @Table({

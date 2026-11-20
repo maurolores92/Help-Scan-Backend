@@ -4,3 +4,5 @@ autoInstallPeers: true
 allowBuilds:
   '@parcel/watcher': true
   bcrypt: true
+  '@whiskeysockets/baileys': true
+  protobufjs: true

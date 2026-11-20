@@ -190,7 +190,16 @@ export class CompaniesService {
       include: [
         {
           model: Plan,
-          attributes: ['id', 'name', 'slug', 'priceMonthly', 'currency', 'isTrial', 'badgeColor'],
+          attributes: [
+            'id',
+            'name',
+            'slug',
+            'priceMonthly',
+            'currency',
+            'isTrial',
+            'badgeColor',
+            'includedModules',
+          ],
         },
       ],
     });

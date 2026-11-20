@@ -73,9 +73,9 @@ export class FtpDevicesService {
       const modules = Array.isArray(company.enabledModules)
         ? company.enabledModules
         : [];
-      if (!modules.includes('documents')) {
+      if (!modules.includes('sftp')) {
         throw new ForbiddenException(
-          "El módulo 'documents' no se encuentra habilitado para su empresa.",
+          "El módulo 'sftp' no se encuentra habilitado para su empresa.",
         );
       }
     }
