@@ -81,6 +81,23 @@ export class TelegramBotClientService {
     return Array.isArray(data.result) ? data.result : [];
   }
 
+  async deleteWebhook(botToken: string): Promise<void> {
+    const token = botToken.trim();
+    const res = await fetch(
+      `${TELEGRAM_API_BASE}/bot${token}/deleteWebhook?drop_pending_updates=false`,
+      {
+        method: 'POST',
+        signal: AbortSignal.timeout(10000),
+      },
+    );
+    if (!res.ok) {
+      const data: any = await res.json().catch(() => ({}));
+      this.logger.warn(
+        `deleteWebhook devolvió HTTP ${res.status}: ${data?.description || ''}`,
+      );
+    }
+  }
+
   async downloadFileBuffer(
     botToken: string,
     fileId: string,

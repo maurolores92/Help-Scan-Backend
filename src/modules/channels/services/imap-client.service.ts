@@ -249,6 +249,62 @@ export class ImapClientService {
     return fetched;
   }
 
+  /**
+   * Mantiene una sesión IMAP IDLE abierta en tiempo real y dispara `onExistsChange`
+   * apenas ingresa un correo nuevo a la casilla sin esperar al intervalo del cron.
+   */
+  async watchMailboxIdle(
+    params: ImapConnectionParams,
+    onExistsChange: () => Promise<void> | void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const client = this.createClient(params);
+    const folder = (params.folder || 'INBOX').trim() || 'INBOX';
+
+    const onAbort = () => {
+      client.logout().catch(() => {
+        try {
+          client.close();
+        } catch { }
+      });
+    };
+
+    if (signal.aborted) return;
+    signal.addEventListener('abort', onAbort, { once: true });
+
+    try {
+      await client.connect();
+      const lock = await client.getMailboxLock(folder);
+      try {
+        let debounceTimer: NodeJS.Timeout | null = null;
+        client.on('exists', () => {
+          if (signal.aborted) return;
+          if (debounceTimer) clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => {
+            Promise.resolve(onExistsChange()).catch((err) => {
+              this.logger.warn(
+                `[IMAP IDLE] Error disparando sync en ${params.emailUser}: ${err?.message}`,
+              );
+            });
+          }, 800);
+        });
+
+        while (!signal.aborted && client.usable) {
+          await client.idle();
+        }
+      } finally {
+        lock.release();
+      }
+    } finally {
+      signal.removeEventListener('abort', onAbort);
+      await client.logout().catch(() => {
+        try {
+          client.close();
+        } catch { }
+      });
+    }
+  }
+
   private formatImapError(err: any, host: string, port: number): string {
     const rawMsg = String(err?.responseText || err?.message || 'Error desconocido');
     if (/Invalid credentials|AUTHENTICATIONFAILED|Application-specific password required/i.test(rawMsg)) {

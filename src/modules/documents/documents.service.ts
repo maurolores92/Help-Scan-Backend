@@ -307,10 +307,10 @@ export class DocumentsService {
         });
 
         await this.notificationsService.dispatch({
-          type: params.source === DocumentSource.EMAIL ? 'channel.email_received' : 'document.uploaded',
+          type: 'document.uploaded',
           title:
             params.source === DocumentSource.EMAIL
-              ? '📬 Documento recibido por Correo'
+              ? '📄 PDF ingresado por Correo'
               : '📄 Documento ingresado',
           body: `Se recibió '${document.originalName}'${params.channelContextLabel ? ` (${params.channelContextLabel})` : ''} y comenzó la extracción automática con IA`,
           companyId,

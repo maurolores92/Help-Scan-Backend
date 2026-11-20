@@ -51,6 +51,7 @@ export const EntityLabel: Record<string, string> = {
   FtpDevice: 'equipo HP / acceso FTP',
   CompanyEmailChannel: 'canal de correo electrónico (IMAP)',
   EmailMessage: 'correo electrónico recibido',
+  DemoRequest: 'solicitud de demostración',
   AuditLog: 'registro de auditoría',
 };
 

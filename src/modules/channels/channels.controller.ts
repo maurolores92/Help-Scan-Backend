@@ -74,6 +74,13 @@ export class ChannelsController {
     return this.channelsService.triggerManualSync(user);
   }
 
+  @Post('email/webhook-secret')
+  @RequireTenantModule('email')
+  @RequirePermission('MANAGE_CHANNELS')
+  async regenerateEmailWebhookSecret(@GetUser() user: any) {
+    return this.channelsService.regenerateWebhookSecret(user);
+  }
+
   @Get('emails')
   @RequireTenantModule('email')
   @RequirePermission('VIEW_EMAIL_INBOX')

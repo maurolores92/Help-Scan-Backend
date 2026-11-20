@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { Op } from 'sequelize';
@@ -27,6 +28,7 @@ import { Company, CompanyStatus } from '../../companies/company.model';
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../audit/audit.model';
 import { NotificationsService } from '../../notifications/notifications.service';
+import { NotificationsGateway } from '../../notifications/notifications.gateway';
 import { isPlatformSuperAdmin } from '../../../common/utils/tenant-scope.util';
 import { convertImageBufferToPdf } from '../helpers/email-pdf-synthesizer.helper';
 import {
@@ -59,6 +61,7 @@ export class WhatsappChannelService implements OnModuleInit {
     private readonly processingQueue: DocumentProcessingQueueService,
     private readonly auditService: AuditService,
     private readonly notificationsService: NotificationsService,
+    @Optional() private readonly gateway?: NotificationsGateway,
   ) {}
 
   onModuleInit(): void {
@@ -529,7 +532,15 @@ export class WhatsappChannelService implements OnModuleInit {
           title: '📲 Comprobante recibido por WhatsApp',
           body: `Se recibió '${finalFileName}' desde ${senderName || `+${senderPhone}`}.`,
           companyId,
-          extraData: { documentId: document.id, link: '/documents' },
+          extraData: { documentId: document.id, whatsappMessageId: record.id, link: '/whatsapp' },
+        });
+
+        this.gateway?.emitToCompany(companyId, 'whatsapp:message_received', {
+          companyId,
+          messageId: record.id,
+          status: WhatsappMessageStatus.PROCESSED,
+          documentId: document.id,
+          fileName: finalFileName,
         });
 
         if (channel.autoReplyConfirmation) {
@@ -558,6 +569,13 @@ export class WhatsappChannelService implements OnModuleInit {
           lastMessageAt: new Date(),
           lastSyncStatus: WhatsappSyncStatus.ERROR,
           lastSyncMessage: errMsg,
+        });
+
+        this.gateway?.emitToCompany(companyId, 'whatsapp:message_received', {
+          companyId,
+          messageId: record.id,
+          status: WhatsappMessageStatus.ERROR,
+          fileName: reportedFileName,
         });
 
         if (channel.autoReplyConfirmation) {

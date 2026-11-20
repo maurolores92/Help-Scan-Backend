@@ -8,6 +8,7 @@ import { CompanyTelegramChannel } from './models/company-telegram-channel.model'
 import { TelegramMessage } from './models/telegram-message.model';
 import { Company } from '../companies/company.model';
 import { ChannelsController } from './channels.controller';
+import { EmailWebhookController } from './controllers/email-webhook.controller';
 import { ChannelsService } from './services/channels.service';
 import { ImapClientService } from './services/imap-client.service';
 import { EmailIngestionSchedulerService } from './services/email-ingestion-scheduler.service';
@@ -34,7 +35,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     AuditModule,
     NotificationsModule,
   ],
-  controllers: [ChannelsController],
+  controllers: [ChannelsController, EmailWebhookController],
   providers: [
     ImapClientService,
     ChannelsService,

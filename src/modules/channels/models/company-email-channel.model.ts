@@ -105,4 +105,7 @@ export class CompanyEmailChannel extends Model {
 
   @Column({ type: DataType.TEXT, allowNull: true, field: 'last_sync_message' })
   declare lastSyncMessage: string | null;
+
+  @Column({ type: DataType.STRING(120), allowNull: true, field: 'webhook_secret' })
+  declare webhookSecret: string | null;
 }

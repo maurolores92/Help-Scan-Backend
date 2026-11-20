@@ -21,6 +21,7 @@ import { PlansModule } from './plans/plans.module';
 import { DocumentsModule } from './documents/documents.module';
 import { FtpDevicesModule } from './ftp-devices/ftp-devices.module';
 import { ChannelsModule } from './channels/channels.module';
+import { DemoRequestsModule } from './demo-requests/demo-requests.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { ChannelsModule } from './channels/channels.module';
     DocumentsModule,
     FtpDevicesModule,
     ChannelsModule,
+    DemoRequestsModule,
     AuthModule,
     SeedModule,
     UploadsModule,

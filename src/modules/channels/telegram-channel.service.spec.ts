@@ -99,6 +99,9 @@ describe('TelegramChannelService & Reply Formatter', () => {
       }),
     };
 
+    const notificationsService = { dispatch: jest.fn().mockResolvedValue(undefined) };
+    const gateway = { emitToCompany: jest.fn() };
+
     const service = new TelegramChannelService(
       {} as any,
       telegramMessageModel,
@@ -107,7 +110,8 @@ describe('TelegramChannelService & Reply Formatter', () => {
       documentsService,
       { registerPostProcessHook: jest.fn() } as any,
       { log: jest.fn().mockResolvedValue(undefined) } as any,
-      { dispatch: jest.fn().mockResolvedValue(undefined) } as any,
+      notificationsService as any,
+      gateway as any,
     );
 
     // 1. Mensaje autorizado con PDF
@@ -156,5 +160,21 @@ describe('TelegramChannelService & Reply Formatter', () => {
     expect(createdMessages[0].status).toBe(TelegramMessageStatus.PROCESSED);
     expect(createdMessages[0].documentId).toBe(777);
     expect(createdMessages[1].status).toBe(TelegramMessageStatus.REJECTED_SENDER);
+
+    expect(notificationsService.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'channel.telegram_received',
+        companyId: 8,
+      }),
+    );
+    expect(gateway.emitToCompany).toHaveBeenCalledWith(
+      8,
+      'telegram:message_received',
+      expect.objectContaining({
+        companyId: 8,
+        status: TelegramMessageStatus.PROCESSED,
+        documentId: 777,
+      }),
+    );
   });
 });

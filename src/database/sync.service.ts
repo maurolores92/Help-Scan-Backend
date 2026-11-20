@@ -39,6 +39,7 @@ export class SyncService implements OnModuleInit {
       'WhatsappMessage',
       'CompanyTelegramChannel',
       'TelegramMessage',
+      'DemoRequest',
     ];
 
     if (isForceSync) {
@@ -196,6 +197,7 @@ export class SyncService implements OnModuleInit {
       `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "last_qr_at" TIMESTAMP WITH TIME ZONE DEFAULT NULL;`,
       `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "last_message_at" TIMESTAMP WITH TIME ZONE DEFAULT NULL;`,
       `ALTER TABLE "whatsapp_messages" ADD COLUMN IF NOT EXISTS "reply_jid" VARCHAR(120) DEFAULT NULL;`,
+      `ALTER TABLE "company_email_channels" ADD COLUMN IF NOT EXISTS "webhook_secret" VARCHAR(120) DEFAULT NULL;`,
     ];
 
     for (const sql of statements) {
@@ -239,6 +241,8 @@ export class SyncService implements OnModuleInit {
       { table: 'telegram_messages', name: 'idx_telegram_messages_company_id', column: 'company_id' },
       { table: 'telegram_messages', name: 'idx_telegram_messages_status', column: 'status' },
       { table: 'telegram_messages', name: 'idx_telegram_messages_external_id', column: 'external_message_id' },
+      { table: 'demo_requests', name: 'idx_demo_requests_status', column: 'status' },
+      { table: 'demo_requests', name: 'idx_demo_requests_created_at', column: 'created_at' },
     ];
 
     for (const idx of singleColumnIndexes) {
@@ -268,7 +272,7 @@ export class SyncService implements OnModuleInit {
       // El Super Admin global nunca debe pertenecer a una compañía tenant específica
       `UPDATE "users" SET "company_id" = NULL WHERE LOWER("username") = 'superadmin' OR "role_id" IN (SELECT "id" FROM "roles" WHERE "slug" = 'superadmin');`,
       // Limpiar company_id residual en auditorías de entidades globales de plataforma
-      `UPDATE "audits" SET "company_id" = NULL WHERE LOWER("entity") IN ('plan', 'plans', 'permission', 'permissions');`,
+      `UPDATE "audits" SET "company_id" = NULL WHERE LOWER("entity") IN ('plan', 'plans', 'permission', 'permissions', 'demorequest');`,
       // Purgar cualquier notificación cruzada recibida por usuarios de otra compañía
       `DELETE FROM "notifications" n USING "users" u WHERE n."user_id" = u."id" AND u."company_id" IS NOT NULL AND n."company_id" IS NOT NULL AND n."company_id" <> u."company_id";`,
       `DELETE FROM "notifications" n USING "users" u WHERE n."user_id" = u."id" AND u."company_id" IS NOT NULL AND n."type" = 'system.company_created';`,

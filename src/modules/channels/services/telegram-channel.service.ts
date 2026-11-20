@@ -6,6 +6,7 @@ import {
   OnApplicationBootstrap,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import * as crypto from 'crypto';
@@ -30,6 +31,7 @@ import { Company, CompanyStatus } from '../../companies/company.model';
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../audit/audit.model';
 import { NotificationsService } from '../../notifications/notifications.service';
+import { NotificationsGateway } from '../../notifications/notifications.gateway';
 import {
   decryptFtpSecret,
   encryptFtpSecret,
@@ -61,6 +63,7 @@ export class TelegramChannelService
 {
   private readonly logger = new Logger(TelegramChannelService.name);
   private readonly pollingWorkers = new Map<number, PollingWorkerState>();
+  private reconcileTimer: NodeJS.Timeout | null = null;
 
   constructor(
     @InjectModel(CompanyTelegramChannel)
@@ -74,6 +77,7 @@ export class TelegramChannelService
     private readonly processingQueue: DocumentProcessingQueueService,
     private readonly auditService: AuditService,
     private readonly notificationsService: NotificationsService,
+    @Optional() private readonly gateway?: NotificationsGateway,
   ) {}
 
   onModuleInit(): void {
@@ -92,10 +96,31 @@ export class TelegramChannelService
     }
 
     try {
+      await this.reconcileActiveBots();
+      this.reconcileTimer = setInterval(() => {
+        this.reconcileActiveBots().catch(() => {});
+      }, 60_000);
+    } catch (err: any) {
+      this.logger.warn(
+        `[Telegram] No se pudieron iniciar bots al arrancar: ${err?.message}`,
+      );
+    }
+  }
+
+  async reconcileActiveBots(): Promise<void> {
+    if (
+      process.env.NODE_ENV === 'test' ||
+      process.env.DISABLE_TELEGRAM_BOT === 'true'
+    ) {
+      return;
+    }
+
+    try {
       const activeChannels = await this.telegramChannelModel.findAll({
         where: { isActive: true },
       });
 
+      const activeEligible = new Set<number>();
       for (const ch of activeChannels) {
         const company = await this.companyModel.findByPk(ch.companyId, {
           attributes: ['id', 'status', 'enabledModules'],
@@ -109,17 +134,28 @@ export class TelegramChannelService
           company.status === CompanyStatus.ACTIVE &&
           modules.includes('telegram')
         ) {
+          activeEligible.add(ch.companyId);
           this.startPollingForCompany(ch.companyId);
+        }
+      }
+
+      for (const runningId of Array.from(this.pollingWorkers.keys())) {
+        if (!activeEligible.has(runningId)) {
+          this.stopPollingForCompany(runningId);
         }
       }
     } catch (err: any) {
       this.logger.warn(
-        `[Telegram] No se pudieron iniciar bots al arrancar: ${err?.message}`,
+        `[Telegram] Error reconciliando bots activos: ${err?.message}`,
       );
     }
   }
 
   async onModuleDestroy(): Promise<void> {
+    if (this.reconcileTimer) {
+      clearInterval(this.reconcileTimer);
+      this.reconcileTimer = null;
+    }
     for (const companyId of Array.from(this.pollingWorkers.keys())) {
       this.stopPollingForCompany(companyId);
     }
@@ -378,6 +414,7 @@ export class TelegramChannelService
     worker: PollingWorkerState,
   ): Promise<void> {
     let errorStreak = 0;
+    let webhookCleared = false;
 
     while (!worker.stopped) {
       try {
@@ -390,6 +427,10 @@ export class TelegramChannelService
         }
 
         const token = decryptFtpSecret(channel.encryptedBotToken);
+        if (!webhookCleared) {
+          await this.botClient.deleteWebhook(token).catch(() => {});
+          webhookCleared = true;
+        }
         const offset = Number(channel.lastPollOffset || 0);
 
         const updates = await this.botClient.getUpdates(
@@ -675,7 +716,19 @@ export class TelegramChannelService
         title: '✈️ Comprobante recibido por Telegram',
         body: `Se recibió '${finalFileName}' desde ${senderName || (senderUsername ? `@${senderUsername}` : chatId)}.`,
         companyId,
-        extraData: { documentId: document.id, link: '/documents' },
+        extraData: {
+          documentId: document.id,
+          telegramMessageId: record.id,
+          link: '/telegram',
+        },
+      });
+
+      this.gateway?.emitToCompany(companyId, 'telegram:message_received', {
+        companyId,
+        messageId: record.id,
+        status: TelegramMessageStatus.PROCESSED,
+        documentId: document.id,
+        fileName: finalFileName,
       });
 
       if (channel.autoReplyConfirmation) {
@@ -704,6 +757,21 @@ export class TelegramChannelService
         lastMessageAt: new Date(),
         lastSyncStatus: TelegramSyncStatus.ERROR,
         lastSyncMessage: errMsg,
+      });
+
+      await this.notificationsService.dispatch({
+        type: 'document.error',
+        title: '⚠️ Error al procesar archivo de Telegram',
+        body: `'${reportedFileName}': ${errMsg}`,
+        companyId,
+        extraData: { telegramMessageId: record.id, link: '/telegram' },
+      });
+
+      this.gateway?.emitToCompany(companyId, 'telegram:message_received', {
+        companyId,
+        messageId: record.id,
+        status: TelegramMessageStatus.ERROR,
+        fileName: reportedFileName,
       });
 
       if (channel.autoReplyConfirmation) {
