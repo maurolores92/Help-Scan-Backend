@@ -37,6 +37,8 @@ export class SyncService implements OnModuleInit {
       'EmailMessage',
       'CompanyWhatsappChannel',
       'WhatsappMessage',
+      'CompanyTelegramChannel',
+      'TelegramMessage',
     ];
 
     if (isForceSync) {
@@ -233,6 +235,10 @@ export class SyncService implements OnModuleInit {
       { table: 'whatsapp_messages', name: 'idx_whatsapp_messages_company_id', column: 'company_id' },
       { table: 'whatsapp_messages', name: 'idx_whatsapp_messages_status', column: 'status' },
       { table: 'whatsapp_messages', name: 'idx_whatsapp_messages_external_id', column: 'external_message_id' },
+      { table: 'company_telegram_channels', name: 'idx_telegram_channels_company_id', column: 'company_id' },
+      { table: 'telegram_messages', name: 'idx_telegram_messages_company_id', column: 'company_id' },
+      { table: 'telegram_messages', name: 'idx_telegram_messages_status', column: 'status' },
+      { table: 'telegram_messages', name: 'idx_telegram_messages_external_id', column: 'external_message_id' },
     ];
 
     for (const idx of singleColumnIndexes) {

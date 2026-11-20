@@ -29,6 +29,12 @@ import { AuditAction } from '../../audit/audit.model';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { isPlatformSuperAdmin } from '../../../common/utils/tenant-scope.util';
 import { convertImageBufferToPdf } from '../helpers/email-pdf-synthesizer.helper';
+import {
+  buildDuplicateNoticeMessage,
+  buildIngestErrorMessage,
+  buildOcrCompletedMessage,
+  buildReceiptAckMessage,
+} from '../helpers/channel-reply-formatter.helper';
 
 export function normalizeWhatsappPhone(raw: string): string {
   return String(raw || '')
@@ -525,6 +531,22 @@ export class WhatsappChannelService implements OnModuleInit {
           companyId,
           extraData: { documentId: document.id, link: '/documents' },
         });
+
+        if (channel.autoReplyConfirmation) {
+          const ackText = isDuplicate
+            ? buildDuplicateNoticeMessage({
+                fileName: finalFileName,
+                documentId: document.id,
+              })
+            : buildReceiptAckMessage({
+                fileName: finalFileName,
+                documentId: document.id,
+                channelName: 'WhatsApp',
+              });
+          await this.baileysService
+            .sendTextMessage(companyId, remoteJid, ackText)
+            .catch(() => {});
+        }
       } catch (err: any) {
         const errMsg =
           err?.message || 'Error al descargar o procesar archivo de WhatsApp';
@@ -543,7 +565,10 @@ export class WhatsappChannelService implements OnModuleInit {
             .sendTextMessage(
               companyId,
               remoteJid,
-              `⚠️ No pudimos procesar tu archivo '${reportedFileName}': ${errMsg}`,
+              buildIngestErrorMessage({
+                fileName: reportedFileName,
+                reason: errMsg,
+              }),
             )
             .catch(() => {});
         }
@@ -563,26 +588,11 @@ export class WhatsappChannelService implements OnModuleInit {
       });
       if (!channel || !channel.autoReplyConfirmation) return;
 
-      const docType = (doc.documentType || 'comprobante').replace(/_/g, ' ');
-      const parts = [
-        `✅ *Comprobante registrado en HC-SCAN*`,
-        `• Archivo: ${doc.originalName}`,
-        `• Tipo: ${docType}`,
-      ];
-      if (doc.documentNumber) parts.push(`• N°: ${doc.documentNumber}`);
-      if (doc.issuerName) parts.push(`• Emisor: ${doc.issuerName}`);
-      if (doc.totalAmount !== null && doc.totalAmount !== undefined) {
-        const currency = doc.currency || 'ARS';
-        parts.push(
-          `• Total: ${currency} ${Number(doc.totalAmount).toLocaleString('es-AR', { minimumFractionDigits: 2 })}`,
-        );
-      }
-
       const target = msg.replyJid || msg.senderPhone;
       await this.baileysService.sendTextMessage(
         doc.companyId,
         target,
-        parts.join('\n'),
+        buildOcrCompletedMessage(doc),
       );
     } catch (err: any) {
       this.logger.warn(

@@ -20,8 +20,12 @@ import { TestEmailConnectionDto } from './dto/test-email-connection.dto';
 import { QueryEmailMessagesDto } from './dto/query-email-messages.dto';
 import { UpsertWhatsappChannelDto } from './dto/upsert-whatsapp-channel.dto';
 import { QueryWhatsappMessagesDto } from './dto/query-whatsapp-messages.dto';
+import { UpsertTelegramChannelDto } from './dto/upsert-telegram-channel.dto';
+import { TestTelegramConnectionDto } from './dto/test-telegram-connection.dto';
+import { QueryTelegramMessagesDto } from './dto/query-telegram-messages.dto';
 import { ChannelsService } from './services/channels.service';
 import { WhatsappChannelService } from './services/whatsapp-channel.service';
+import { TelegramChannelService } from './services/telegram-channel.service';
 
 @Controller('channels')
 @UseGuards(AuthGuard('jwt'), PermissionsGuard, TenantModuleGuard)
@@ -29,6 +33,7 @@ export class ChannelsController {
   constructor(
     private readonly channelsService: ChannelsService,
     private readonly whatsappChannelService: WhatsappChannelService,
+    private readonly telegramChannelService: TelegramChannelService,
   ) {}
 
   // =========================================================================
@@ -152,5 +157,46 @@ export class ChannelsController {
     @GetUser() user: any,
   ) {
     return this.whatsappChannelService.listMessages(query, user);
+  }
+
+  // =========================================================================
+  // CANAL TELEGRAM BOT PROPIO POR COMPAÑÍA (@BotFather)
+  // =========================================================================
+
+  @Get('telegram')
+  @RequireTenantModule('telegram')
+  @RequirePermission('VIEW_CHANNELS')
+  async getTelegramConfig(@GetUser() user: any) {
+    return this.telegramChannelService.getChannelConfig(user);
+  }
+
+  @Post('telegram')
+  @RequireTenantModule('telegram')
+  @RequirePermission('MANAGE_CHANNELS')
+  async upsertTelegramConfig(
+    @Body() dto: UpsertTelegramChannelDto,
+    @GetUser() user: any,
+  ) {
+    return this.telegramChannelService.upsertChannelConfig(dto, user);
+  }
+
+  @Post('telegram/test')
+  @RequireTenantModule('telegram')
+  @RequirePermission('MANAGE_CHANNELS')
+  async testTelegramConnection(
+    @Body() dto: TestTelegramConnectionDto,
+    @GetUser() user: any,
+  ) {
+    return this.telegramChannelService.testConnection(dto, user);
+  }
+
+  @Get('telegram/messages')
+  @RequireTenantModule('telegram')
+  @RequirePermission('VIEW_TELEGRAM_INBOX')
+  async listTelegramMessages(
+    @Query() query: QueryTelegramMessagesDto,
+    @GetUser() user: any,
+  ) {
+    return this.telegramChannelService.listMessages(query, user);
   }
 }

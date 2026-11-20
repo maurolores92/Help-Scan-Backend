@@ -150,6 +150,12 @@ export const permissionsData = [
     description: 'Permite auditar los comprobantes, fotos y mensajes recibidos vía WhatsApp Business',
     categoria: CategoriaPermiso.DOCUMENTS,
   },
+  {
+    name: 'VIEW_TELEGRAM_INBOX',
+    displayName: 'Ver Mensajes de Telegram Recibidos',
+    description: 'Permite auditar los comprobantes, fotos y mensajes recibidos vía Telegram Bot',
+    categoria: CategoriaPermiso.DOCUMENTS,
+  },
 
   // ==========================================
   // AUDITORÍA

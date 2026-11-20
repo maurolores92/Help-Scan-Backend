@@ -119,6 +119,26 @@ export const NOTIFICATION_REGISTRY: Record<string, NotificationDefinition> = {
     defaultInApp: true,
     defaultRecipients: ['company_admin', 'company_users'],
   },
+  'channel.telegram_configured': {
+    key: 'channel.telegram_configured',
+    category: NotificationCategory.DOCUMENTS,
+    label: 'Bot de Telegram configurado',
+    description: 'Cuando se conecta o actualiza el bot corporativo de Telegram de la empresa',
+    icon: 'tabler:brand-telegram',
+    emoji: '✈️',
+    defaultInApp: true,
+    defaultRecipients: ['company_admin'],
+  },
+  'channel.telegram_received': {
+    key: 'channel.telegram_received',
+    category: NotificationCategory.DOCUMENTS,
+    label: 'Comprobante ingresado por Telegram',
+    description: 'Cuando llega un PDF o imagen de comprobante al bot de Telegram de la empresa',
+    icon: 'tabler:brand-telegram',
+    emoji: '📨',
+    defaultInApp: true,
+    defaultRecipients: ['company_admin', 'company_users'],
+  },
 
   // ── 2. Compañías / Tenants & Planes (Plataforma y Límites) ────────────────
   'system.company_created': {

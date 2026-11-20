@@ -78,7 +78,7 @@ describe('WhatsappChannelService (QR Baileys)', () => {
       ignoreGroups: true,
       isActive: true,
       processImages: true,
-      autoReplyConfirmation: false,
+      autoReplyConfirmation: true,
       lastSyncStatus: WhatsappSyncStatus.IDLE,
       update: jest.fn().mockResolvedValue(undefined),
     };
@@ -192,5 +192,12 @@ describe('WhatsappChannelService (QR Baileys)', () => {
     expect(createdMessages[0].documentId).toBe(505);
     expect(createdMessages[0].replyJid).toBe('5491144445555@s.whatsapp.net');
     expect(createdMessages[1].status).toBe(WhatsappMessageStatus.REJECTED_SENDER);
+
+    expect(baileysService.sendTextMessage).toHaveBeenCalledTimes(1);
+    expect(baileysService.sendTextMessage).toHaveBeenCalledWith(
+      7,
+      '5491144445555@s.whatsapp.net',
+      expect.stringContaining('esperando validación'),
+    );
   });
 });
