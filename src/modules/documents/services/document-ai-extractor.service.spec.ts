@@ -455,5 +455,113 @@ describe('DocumentAiExtractorService', () => {
     expect(result.extractionEngine).toBe('python_tesseract_ocr');
     expect(result.issuerTaxId).toBe('30-71112223-4');
   });
+
+  it('debe distinguir Emisor (cabecera AFIP Razón Social) de Receptor (bloque cliente) en heurística local', async () => {
+    delete process.env.GEMINI_API_KEY;
+    mockedPdfParse.mockResolvedValueOnce({
+      numpages: 1,
+      text: `
+        FACTURA A ORIGINAL
+        Razón Social: DISTRIBUIDORA DEL SUR S.R.L.
+        CUIT: 30-70841005-1
+        Domicilio Comercial: Av. Colón 1234
+        Apellido y Nombre / Razón Social: FERRETERIA NORTE S.A.
+        CUIT: 30-71234567-9
+        Total: $ 85000.00
+      `,
+    });
+
+    const result = await service.extractFromBuffer(
+      Buffer.from('%PDF-1.4 afip header'),
+      'factura_afip.pdf',
+    );
+
+    expect(result.issuerName).toBe('DISTRIBUIDORA DEL SUR S.R.L.');
+    expect(result.issuerTaxId).toBe('30-70841005-1');
+    expect(result.recipientName).toBe('FERRETERIA NORTE S.A.');
+    expect(result.recipientTaxId).toBe('30-71234567-9');
+  });
+
+  it('debe rescatar con gemini_vision cuando gemini_text devuelve issuerName vacío por venir en un logo', async () => {
+    process.env.GEMINI_API_KEY = 'fake-gemini-key';
+    const nativeWithoutLogoText =
+      'FACTURA A Nro 00004-00009911 Fecha 24/11/2026 Señores: SUPERMERCADO CENTRO S.A. CUIT 30-71234567-9 Importe Total $ 250000';
+    mockedPdfParse.mockResolvedValueOnce({
+      numpages: 1,
+      text: nativeWithoutLogoText,
+    });
+
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          usageMetadata: { totalTokenCount: 700 },
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      documentType: 'factura_a',
+                      summary: 'Factura A hacia Supermercado Centro',
+                      documentNumber: '00004-00009911',
+                      issuerName: null,
+                      recipientName: 'SUPERMERCADO CENTRO S.A.',
+                      recipientTaxId: '30-71234567-9',
+                      totalAmount: 250000,
+                      items: [],
+                      aiConfidence: 0.91,
+                    }),
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          usageMetadata: { totalTokenCount: 1300 },
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      documentType: 'factura_a',
+                      summary: 'Factura A emitida por Acme Equipos S.A. (detectado en logo)',
+                      documentNumber: '00004-00009911',
+                      issuerName: 'ACME EQUIPOS S.A.',
+                      issuerTaxId: '30-70841005-1',
+                      recipientName: 'SUPERMERCADO CENTRO S.A.',
+                      recipientTaxId: '30-71234567-9',
+                      totalAmount: 250000,
+                      items: [],
+                      aiConfidence: 0.96,
+                    }),
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      });
+    global.fetch = fetchMock as any;
+
+    const result = await service.extractFromBuffer(
+      Buffer.from('%PDF-1.4 native with graphic logo'),
+      'factura_con_logo.pdf',
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.extractionEngine).toBe('gemini_vision');
+    expect(result.issuerName).toBe('ACME EQUIPOS S.A.');
+    expect(result.recipientName).toBe('SUPERMERCADO CENTRO S.A.');
+    expect(result.tokensUsed).toBe(2000);
+    const secondPayload = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(secondPayload.contents[0].parts[0].inlineData.mimeType).toBe('application/pdf');
+  });
 });
 

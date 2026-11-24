@@ -16,7 +16,10 @@ INSTRUCCIONES CLAVE DE EXTRACCIÓN Y NORMALIZACIÓN:
 1. Comprobantes fiscales y comerciales:
    - Identifica el tipo exacto: "factura_a", "factura_b", "factura_c", "remito", "presupuesto", "nota_pedido", "orden_compra", "recibo", "orden_servicio", "contrato", "legajo", "otro".
    - Número de documento: Si tiene punto de venta o sucursal, normaliza a formato de 5 y 8 dígitos ej: "00008-00041980" o el identificador visible.
-   - Emisor vs Receptor: Distingue con precisión quién emite la factura (proveedor/prestador) y quién la recibe (cliente/señores/domicilio de entrega).
+   - Emisor vs Receptor y Logos (MUY IMPORTANTE):
+     * EMISOR ("issuerName", "issuerTaxId"): es SIEMPRE la empresa/persona que emite el comprobante. Suele estar en el membrete superior (arriba de "ORIGINAL" / letra A/B/C/R / "Señores:"), frecuentemente **dentro de un LOGO gráfico** o en tipografía grande junto a Punto de Venta / Ingresos Brutos / Inicio de Actividades. Si analizas el PDF visualmente y el nombre del emisor figura solo dentro del logotipo de cabecera, léelo directamente del logo y devuélvelo en "issuerName".
+     * RECEPTOR ("recipientName", "recipientTaxId"): es SIEMPRE el cliente a quien va dirigido el comprobante. Aparece en el cuadro medio/inferior bajo rótulos como "Señores:", "Cliente:", "Destinatario:", "Apellido y Nombre / Razón Social:" o junto a "Domicilio:" / "Condición frente al IVA" del comprador. NUNCA pongas al receptor en "issuerName" ni al emisor en "recipientName".
+     * RESPONSABLE ("responsiblePerson"): completar ÚNICAMENTE si figura explícitamente una persona física firmante, vendedor, contacto o quien recibe conforme (ej: "Recibió: Juan Pérez", "Atte: María López"). NO pongas aquí el nombre de la empresa emisora, ni del cliente, ni la ciudad; si no aparece una persona física explícita, usa null.
    - CUITs: Formato XX-XXXXXXXX-X (11 dígitos). Corrige automáticamente errores ópticos comunes de OCR (como letra 'O' por número '0', o barras '/' por guiones '-').
    - CAE: Si figura CAE de AFIP (código de 14 dígitos numéricos), extráelo limpio en "cae".
    - Condición fiscal de IVA: Clasifica estrictamente en una de: "Responsable Inscripto", "Monotributo", "Exento", "Consumidor Final", "No Responsable".
@@ -193,6 +196,16 @@ export class DocumentAiExtractorService implements OnModuleInit {
 
               try {
                 this.logger.log(`[DocumentAiExtractor] ${modeLog}`);
+                if (targetMode === 'gemini_text') {
+                  return await this.runGeminiTextWithLogoRescue({
+                    apiKey,
+                    nativeText: rawTextToAnalyze,
+                    fileBuffer,
+                    originalFileName,
+                    pageCount: pythonResult.pageCount || pageCount || 1,
+                    fallbackResult: pythonResult,
+                  });
+                }
                 return await this.callGeminiExtractor({
                   apiKey,
                   mode: targetMode,
@@ -230,9 +243,8 @@ export class DocumentAiExtractorService implements OnModuleInit {
 
     try {
       if (hasCleanNativeText) {
-        return await this.callGeminiExtractor({
+        return await this.runGeminiTextWithLogoRescue({
           apiKey,
-          mode: 'gemini_text',
           nativeText,
           fileBuffer,
           originalFileName,
@@ -254,6 +266,66 @@ export class DocumentAiExtractorService implements OnModuleInit {
       );
       return extractUniversalHeuristicsFromText(nativeText, originalFileName, pageCount);
     }
+  }
+
+  private needsVisionLogoRescue(result: UniversalDocumentExtractionResult): boolean {
+    const issuer = (result.issuerName || '').trim();
+    const recipient = (result.recipientName || '').trim();
+
+    if (!issuer) return true;
+    if (issuer && recipient && issuer.toLowerCase() === recipient.toLowerCase()) return true;
+    if (typeof result.aiConfidence === 'number' && result.aiConfidence < 0.72) return true;
+
+    return false;
+  }
+
+  /**
+   * Ejecuta Gemini en modo texto rápido y, si falta el emisor (típico cuando viene solo dentro de un logo)
+   * o los datos quedaron ambiguos, rescata automáticamente leyendo el PDF visualmente con `gemini_vision`.
+   */
+  private async runGeminiTextWithLogoRescue(params: {
+    apiKey: string;
+    nativeText: string;
+    fileBuffer: Buffer;
+    originalFileName: string;
+    pageCount: number;
+    fallbackResult?: UniversalDocumentExtractionResult;
+  }): Promise<UniversalDocumentExtractionResult> {
+    const textResult = await this.callGeminiExtractor({
+      ...params,
+      mode: 'gemini_text',
+    });
+
+    if (
+      this.needsVisionLogoRescue(textResult) &&
+      params.fileBuffer.length <= MAX_GEMINI_VISION_PDF_BYTES
+    ) {
+      try {
+        this.logger.log(
+          `[DocumentAiExtractor] 🖼️ Emisor ausente o ambiguo en texto nativo (posible logo en cabecera) para '${params.originalFileName}'. Rescatando con Gemini Vision...`,
+        );
+        const visionResult = await this.callGeminiExtractor({
+          apiKey: params.apiKey,
+          mode: 'gemini_vision',
+          nativeText: params.nativeText,
+          fileBuffer: params.fileBuffer,
+          originalFileName: params.originalFileName,
+          pageCount: params.pageCount,
+          fallbackResult: textResult,
+        });
+
+        return {
+          ...visionResult,
+          tokensUsed: (textResult.tokensUsed || 0) + (visionResult.tokensUsed || 0),
+        };
+      } catch (visionErr: any) {
+        this.logger.warn(
+          `[DocumentAiExtractor] No se pudo completar rescate visual por logo para '${params.originalFileName}' (${visionErr?.message}). Conservando resultado gemini_text.`,
+        );
+      }
+    }
+
+    return textResult;
   }
 
   private async parseNativePdf(
