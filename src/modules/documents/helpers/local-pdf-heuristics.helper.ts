@@ -465,15 +465,65 @@ export const extractUniversalHeuristicsFromText = (
   const periodMatch = cleanText.match(/(?:per[ií]odo\s+(?:facturado|desde|mes)?|mes)[:\s]*([^\n\r]{4,30})/i);
   const period = periodMatch ? periodMatch[1].trim() : null;
 
-  // Emisor / Proveedor
-  const issuerMatch = cleanText.match(/(?:proveedor|emisor|empresa)\s*:\s*([^\n]{3,90})/i);
-  const issuerName = issuerMatch ? issuerMatch[1].trim() : null;
+  // Separar encabezado (Emisor) de bloque cliente (Receptor)
+  const clientSectionMatch = cleanText.match(
+    /(?:apellido\s+y\s+nombre(?:\s*\/\s*raz[oó]n\s+social)?|se[ñn]or(?:es)?|cliente|destinatario|comprador)\s*[:.]/i,
+  );
+  const headerBlock =
+    clientSectionMatch && clientSectionMatch.index !== undefined
+      ? cleanText.slice(0, clientSectionMatch.index).trim()
+      : cleanText.slice(0, 1200).trim();
+  const clientBlockText =
+    clientSectionMatch && clientSectionMatch.index !== undefined
+      ? cleanText.slice(clientSectionMatch.index, clientSectionMatch.index + 450).trim()
+      : '';
 
-  // Cliente / Destinatario / Razón Social
+  const cleanPartyName = (raw?: string | null): string | null => {
+    if (!raw) return null;
+    const trimmed = raw
+      .split(/\b(?:c\.?u\.?i\.?t\.?|d\.?n\.?i\.?|domicilio|direcci[oó]n|condici[oó]n|iva)\b/i)[0]
+      .replace(/\d{5,}.*$/, '')
+      .replace(/^[\s:\-–—]+|[\s:\-–—]+$/g, '')
+      .trim();
+    return trimmed.length >= 2 ? trimmed : null;
+  };
+
+  // Emisor / Proveedor (priorizando membrete superior antes del bloque cliente)
+  const issuerMatch =
+    cleanText.match(/(?:proveedor|emisor|empresa)\s*:\s*([^\n]{3,90})/i) ||
+    headerBlock.match(/(?:raz[oó]n\s+social|denominaci[oó]n)\s*:\s*([^\n]{3,90})/i);
+  let issuerName = cleanPartyName(issuerMatch?.[1]);
+  if (!issuerName && /HELP\s*COPIES/i.test(headerBlock)) {
+    issuerName = 'HELP COPIES S.R.L.';
+  }
+  if (!issuerName && headerBlock) {
+    const headerLines = headerBlock.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 12);
+    for (const hLine of headerLines) {
+      if (/^(?:factura|remito|presupuesto|nota\s+de|recibo|orden\s+de|original|duplicado|triplicado|afip|arca|comprobante|fecha|cuit|punto\s+de\s+venta|ingresos\s+brutos|iva\b)/i.test(hLine)) {
+        continue;
+      }
+      if (/\b(?:S\.?\s*A\.?\s*S?\.?|S\.?\s*R\.?\s*L\.?|S\.?\s*C\.?\s*A\.?|S\.?\s*H\.?|COOPERATIVA|FUNDACI[OÓ]N|ASOCIACI[OÓ]N)\b/i.test(hLine)) {
+        const candidate = cleanPartyName(hLine);
+        if (candidate) {
+          issuerName = candidate;
+          break;
+        }
+      }
+    }
+  }
+
+  // Cliente / Destinatario / Receptor (nunca capturar la Razón Social del encabezado emisor)
   const recipientMatch =
-    cleanText.match(/(?:se[ñn]or(?:es)?|raz[oó]n\s+social|cliente|destinatario)[:\s]*([^\n\r0-9]{3,90})/i) ||
-    cleanText.match(/(?:se[ñn]or(?:es)?|raz[oó]n\s+social|cliente)[:\s]*([^\n\r]{3,90})/i);
-  let recipientName = recipientMatch ? recipientMatch[1].trim().replace(/\d{5,}.*$/, '').trim() : null;
+    cleanText.match(
+      /(?:apellido\s+y\s+nombre(?:\s*\/\s*raz[oó]n\s+social)?|se[ñn]or(?:es)?|cliente|destinatario|comprador)[:\s]*([^\n\r]{3,90})/i,
+    ) ||
+    (clientBlockText
+      ? clientBlockText.match(/raz[oó]n\s+social[:\s]*([^\n\r]{3,90})/i)
+      : null);
+  let recipientName = cleanPartyName(recipientMatch?.[1]);
+  if (recipientName && issuerName && recipientName.toLowerCase() === issuerName.toLowerCase()) {
+    recipientName = null;
+  }
 
   // Domicilio y Localidad
   const addrMatch = cleanText.match(/(?:domicilio|direcci[oó]n|entrega\s+en)[:\s]*([^\n\r]{4,100})/i);
@@ -494,17 +544,24 @@ export const extractUniversalHeuristicsFromText = (
   const recipientEmail = emailMatch ? emailMatch[1].trim() : null;
 
   // Identificar CUIT de cliente y emisor con precisión
-  let recipientTaxId = primaryTaxId;
+  const normalizedCuits = allCuits.map((c) => c.replace(/\s+/g, ''));
+  const headerCuits = (headerBlock.match(/\b(?:20|23|24|27|30|33|34)[-\s]?\d{8}[-\s]?\d\b/g) || []).map((c) =>
+    c.replace(/\s+/g, ''),
+  );
+  let recipientTaxId: string | null = null;
   let issuerTaxId: string | null = null;
 
   const clientBlockMatch = cleanText.match(
-    /(?:se[ñn]or(?:es)?|raz[oó]n\s+social|cliente)[:\s]*([\s\S]{1,250}?)(?:\b(?:transferencia|c\.?a\.?e\.?|precio|total|subtotal|act:)\b|$)/i,
+    /(?:apellido\s+y\s+nombre(?:\s*\/\s*raz[oó]n\s+social)?|se[ñn]or(?:es)?|cliente|destinatario|comprador)[:\s]*([\s\S]{1,280}?)(?:\b(?:transferencia|c\.?a\.?e\.?|precio|total|subtotal|act:)\b|$)/i,
   );
   if (clientBlockMatch) {
     const clientCuits = clientBlockMatch[0].match(/\b(?:20|23|24|27|30|33|34)[-\s]?\d{8}[-\s]?\d\b/g);
     if (clientCuits && clientCuits.length > 0) {
       recipientTaxId = clientCuits[0].replace(/\s+/g, '');
-      issuerTaxId = allCuits.map((c) => c.replace(/\s+/g, '')).find((c) => c !== recipientTaxId) || null;
+      issuerTaxId =
+        headerCuits.find((c) => c !== recipientTaxId) ||
+        normalizedCuits.find((c) => c !== recipientTaxId) ||
+        null;
       if (!issuerTaxId && issuerName && /HELP\s*COPIES/i.test(issuerName)) {
         issuerTaxId = '';
       }
@@ -514,8 +571,11 @@ export const extractUniversalHeuristicsFromText = (
   if (!issuerTaxId) {
     if (issuerName && /HELP\s*COPIES/i.test(issuerName)) {
       issuerTaxId = '';
+      recipientTaxId = recipientTaxId || primaryTaxId;
     } else {
-      issuerTaxId = allCuits.map((c) => c.replace(/\s+/g, '')).find((c) => c !== recipientTaxId) || primaryTaxId;
+      issuerTaxId = headerCuits[0] || primaryTaxId;
+      recipientTaxId =
+        recipientTaxId || normalizedCuits.find((c) => c !== issuerTaxId) || null;
     }
   }
 
