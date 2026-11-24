@@ -140,14 +140,19 @@ describe('WhatsappChannelService (QR Baileys)', () => {
         key: { id: 'wa.fromme', fromMe: true, remoteJid: '5491144445555@s.whatsapp.net' },
         message: { conversation: 'hola' },
       },
-      // 2. Mensaje de grupo -> debe ignorarse porque ignoreGroups = true
+      // 2. Mensaje de texto plano sin archivo adjunto -> NO debe guardarse ni procesarse
+      {
+        key: { id: 'wa.textonly', fromMe: false, remoteJid: '5491144445555@s.whatsapp.net' },
+        message: { conversation: 'Hola buenas tardes!' },
+      },
+      // 3. Mensaje de grupo -> debe ignorarse porque ignoreGroups = true
       {
         key: { id: 'wa.group', fromMe: false, remoteJid: '120363000@g.us' },
         message: {
           documentMessage: { mimetype: 'application/pdf', fileName: 'grupo.pdf' },
         },
       },
-      // 3. Remitente autorizado con PDF envuelto en documentWithCaptionMessage
+      // 4. Remitente autorizado con PDF envuelto en documentWithCaptionMessage
       {
         key: { id: 'wa.valid', fromMe: false, remoteJid: '5491144445555@s.whatsapp.net' },
         pushName: 'Juan Chofer',
@@ -164,7 +169,7 @@ describe('WhatsappChannelService (QR Baileys)', () => {
           },
         },
       },
-      // 4. Remitente NO autorizado
+      // 5. Remitente NO autorizado con archivo adjunto -> REJECTED_SENDER
       {
         key: { id: 'wa.intruder', fromMe: false, remoteJid: '5491199990000@s.whatsapp.net' },
         pushName: 'Desconocido',
@@ -193,11 +198,7 @@ describe('WhatsappChannelService (QR Baileys)', () => {
     expect(createdMessages[0].replyJid).toBe('5491144445555@s.whatsapp.net');
     expect(createdMessages[1].status).toBe(WhatsappMessageStatus.REJECTED_SENDER);
 
-    expect(baileysService.sendTextMessage).toHaveBeenCalledTimes(1);
-    expect(baileysService.sendTextMessage).toHaveBeenCalledWith(
-      7,
-      '5491144445555@s.whatsapp.net',
-      expect.stringContaining('esperando validación'),
-    );
+    // Procesamiento 100% interno: nunca debe enviar mensajes salientes por WhatsApp
+    expect(baileysService.sendTextMessage).not.toHaveBeenCalled();
   });
 });

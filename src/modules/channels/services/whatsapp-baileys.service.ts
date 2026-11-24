@@ -18,6 +18,7 @@ import {
 import { Company, CompanyStatus } from '../../companies/company.model';
 import { NotificationsGateway } from '../../notifications/notifications.gateway';
 import { getTenantWhatsappSessionPath } from '../../../common/utils/storage-path.util';
+import { extractWhatsappAttachmentInfo } from '../helpers/whatsapp-message.helper';
 
 export interface WhatsappRuntimeSnapshot {
   companyId: number;
@@ -419,8 +420,16 @@ export class WhatsappBaileysService
         if (upsert?.type !== 'notify' || !Array.isArray(upsert?.messages)) {
           return;
         }
-        if (this.incomingHandler) {
-          await this.incomingHandler(companyId, upsert.messages).catch(
+        // Filtrar en origen: solo pasar mensajes entrantes que contengan documento o imagen adjunta
+        const attachmentMessages = upsert.messages.filter((m: any) => {
+          if (!m || m?.key?.fromMe) return false;
+          const jid = String(m?.key?.remoteJid || '').trim();
+          if (!jid || jid === 'status@broadcast') return false;
+          return extractWhatsappAttachmentInfo(m.message).hasAttachment;
+        });
+
+        if (attachmentMessages.length > 0 && this.incomingHandler) {
+          await this.incomingHandler(companyId, attachmentMessages).catch(
             (err) => {
               this.logger.error(
                 `[WhatsApp company_${companyId}] Error procesando mensajes entrantes: ${err?.message}`,

@@ -31,12 +31,7 @@ import { NotificationsService } from '../../notifications/notifications.service'
 import { NotificationsGateway } from '../../notifications/notifications.gateway';
 import { isPlatformSuperAdmin } from '../../../common/utils/tenant-scope.util';
 import { convertImageBufferToPdf } from '../helpers/email-pdf-synthesizer.helper';
-import {
-  buildDuplicateNoticeMessage,
-  buildIngestErrorMessage,
-  buildOcrCompletedMessage,
-  buildReceiptAckMessage,
-} from '../helpers/channel-reply-formatter.helper';
+import { extractWhatsappAttachmentInfo } from '../helpers/whatsapp-message.helper';
 
 export function normalizeWhatsappPhone(raw: string): string {
   return String(raw || '')
@@ -69,11 +64,6 @@ export class WhatsappChannelService implements OnModuleInit {
       (companyId, messages) =>
         this.handleIncomingBaileysMessages(companyId, messages),
     );
-
-    this.processingQueue.registerPostProcessHook(async (doc) => {
-      if (doc.source !== DocumentSource.WHATSAPP) return;
-      await this.handleDocumentProcessedAutoReply(doc);
-    });
   }
 
   private assertTenantUser(user: {
@@ -108,7 +98,7 @@ export class WhatsappChannelService implements OnModuleInit {
         ignoreGroups: true,
         isActive: true,
         processImages: true,
-        autoReplyConfirmation: true,
+        autoReplyConfirmation: false,
         lastSyncStatus: WhatsappSyncStatus.IDLE,
       } as never,
     });
@@ -282,27 +272,6 @@ export class WhatsappChannelService implements OnModuleInit {
     };
   }
 
-  /**
-   * Unwrap de wrappers estándar de WhatsApp (ephemeral, viewOnce, documentWithCaption).
-   */
-  private unwrapMessageContent(rawMessage: any): any {
-    let current = rawMessage;
-    for (let i = 0; i < 4 && current; i++) {
-      if (current.ephemeralMessage?.message) {
-        current = current.ephemeralMessage.message;
-      } else if (current.viewOnceMessage?.message) {
-        current = current.viewOnceMessage.message;
-      } else if (current.viewOnceMessageV2?.message) {
-        current = current.viewOnceMessageV2.message;
-      } else if (current.documentWithCaptionMessage?.message) {
-        current = current.documentWithCaptionMessage.message;
-      } else {
-        break;
-      }
-    }
-    return current;
-  }
-
   async handleIncomingBaileysMessages(
     companyId: number,
     messages: any[],
@@ -336,7 +305,7 @@ export class WhatsappChannelService implements OnModuleInit {
         continue;
       }
 
-      // Ignorar mensajes salientes propios (incluyendo respuestas automáticas)
+      // Ignorar mensajes salientes propios
       if (msg?.key?.fromMe) {
         continue;
       }
@@ -346,8 +315,10 @@ export class WhatsappChannelService implements OnModuleInit {
         continue;
       }
 
-      const content = this.unwrapMessageContent(msg?.message);
-      if (!content) {
+      // Solo obtener y procesar mensajes que traen un documento o imagen adjunta
+      const { content, docMsg, imgMsg, hasAttachment } =
+        extractWhatsappAttachmentInfo(msg?.message);
+      if (!content || !hasAttachment) {
         continue;
       }
 
@@ -373,16 +344,8 @@ export class WhatsappChannelService implements OnModuleInit {
       const receivedAt =
         Number.isFinite(tsSec) && tsSec > 0 ? new Date(tsSec * 1000) : new Date();
 
-      const docMsg = content.documentMessage || null;
-      const imgMsg = content.imageMessage || null;
-      const textBody =
-        content.conversation ||
-        content.extendedTextMessage?.text ||
-        docMsg?.caption ||
-        imgMsg?.caption ||
-        null;
-
-      const msgType = docMsg ? 'document' : imgMsg ? 'image' : 'text';
+      const textBody = docMsg?.caption || imgMsg?.caption || null;
+      const msgType = docMsg ? 'document' : 'image';
 
       // Validar lista blanca si está configurada
       if (channel.senderPolicy === WhatsappSenderPolicy.WHITELIST) {
@@ -406,23 +369,6 @@ export class WhatsappChannelService implements OnModuleInit {
           } as never);
           continue;
         }
-      }
-
-      if (!docMsg && !imgMsg) {
-        await this.whatsappMessageModel.create({
-          companyId,
-          channelId: channel.id,
-          externalMessageId,
-          senderPhone,
-          replyJid: remoteJid,
-          senderName,
-          messageType: 'text',
-          caption: textBody ? String(textBody).slice(0, 1000) : null,
-          receivedAt,
-          status: WhatsappMessageStatus.SKIPPED,
-          statusReason: 'Mensaje de texto sin archivo PDF ni imagen adjunta.',
-        } as never);
-        continue;
       }
 
       if (imgMsg && !channel.processImages) {
@@ -542,22 +488,6 @@ export class WhatsappChannelService implements OnModuleInit {
           documentId: document.id,
           fileName: finalFileName,
         });
-
-        if (channel.autoReplyConfirmation) {
-          const ackText = isDuplicate
-            ? buildDuplicateNoticeMessage({
-                fileName: finalFileName,
-                documentId: document.id,
-              })
-            : buildReceiptAckMessage({
-                fileName: finalFileName,
-                documentId: document.id,
-                channelName: 'WhatsApp',
-              });
-          await this.baileysService
-            .sendTextMessage(companyId, remoteJid, ackText)
-            .catch(() => {});
-        }
       } catch (err: any) {
         const errMsg =
           err?.message || 'Error al descargar o procesar archivo de WhatsApp';
@@ -577,45 +507,7 @@ export class WhatsappChannelService implements OnModuleInit {
           status: WhatsappMessageStatus.ERROR,
           fileName: reportedFileName,
         });
-
-        if (channel.autoReplyConfirmation) {
-          await this.baileysService
-            .sendTextMessage(
-              companyId,
-              remoteJid,
-              buildIngestErrorMessage({
-                fileName: reportedFileName,
-                reason: errMsg,
-              }),
-            )
-            .catch(() => {});
-        }
       }
-    }
-  }
-
-  private async handleDocumentProcessedAutoReply(doc: Document): Promise<void> {
-    try {
-      const msg = await this.whatsappMessageModel.findOne({
-        where: { companyId: doc.companyId, documentId: doc.id },
-      });
-      if (!msg) return;
-
-      const channel = await this.whatsappChannelModel.findOne({
-        where: { companyId: doc.companyId, isActive: true },
-      });
-      if (!channel || !channel.autoReplyConfirmation) return;
-
-      const target = msg.replyJid || msg.senderPhone;
-      await this.baileysService.sendTextMessage(
-        doc.companyId,
-        target,
-        buildOcrCompletedMessage(doc),
-      );
-    } catch (err: any) {
-      this.logger.warn(
-        `Error en respuesta automática post-OCR de WhatsApp para doc #${doc.id}: ${err?.message}`,
-      );
     }
   }
 
