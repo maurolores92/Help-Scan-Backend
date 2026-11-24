@@ -2,11 +2,12 @@ import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { Injectable, Logger } from '@nestjs/common';
+import { getBackendRootPath } from '../utils/storage-path.util';
 
 @Injectable()
 export class FileService {
   private readonly logger = new Logger(FileService.name);
-  private readonly uploadPath = join(__dirname, '../../../storage');
+  private readonly uploadPath = join(getBackendRootPath(), 'storage');
 
   async uploadFile(path: string, file: any) {
     try {

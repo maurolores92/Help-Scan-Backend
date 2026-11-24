@@ -26,11 +26,29 @@ export interface TenantStorageDirectories {
 
 /**
  * Obtiene la raíz del proyecto backend de forma canónica y determinista,
- * evitando que varíe según la carpeta desde donde se ejecutó el comando o proceso (process.cwd()).
+ * buscando `package.json` hacia arriba para que funcione igual desde `src/`,
+ * `dist/src/` o `dist/` y jamás guarde archivos dentro de `dist/` (que `nest build` borra).
  */
 export function getBackendRootPath(): string {
-  // En desarrollo (src/common/utils) o producción (dist/common/utils),
-  // subiendo 3 niveles siempre se llega a la raíz de HC-SCAN-Backend.
+  let current = __dirname;
+  for (let i = 0; i < 8; i++) {
+    if (
+      basename(current).toLowerCase() !== 'dist' &&
+      existsSync(join(current, 'package.json'))
+    ) {
+      return current;
+    }
+    const parent = resolve(current, '..');
+    if (parent === current) break;
+    current = parent;
+  }
+
+  const normalized = __dirname.replace(/\\/g, '/');
+  const distIdx = normalized.lastIndexOf('/dist/');
+  if (distIdx > 0) {
+    return resolve(normalized.slice(0, distIdx));
+  }
+
   return resolve(__dirname, '..', '..', '..');
 }
 
