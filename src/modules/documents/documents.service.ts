@@ -13,10 +13,11 @@ import {
   readDecryptedVaultFile,
   writeEncryptedVaultFile,
 } from '../../common/utils/vault-crypto.util';
-import { Document, DocumentSource, DocumentStatus } from './document.model';
+import { Document, DocumentPaymentStatus, DocumentSource, DocumentStatus } from './document.model';
 import { QueryDocumentDto } from './dto/query-document.dto';
 import { ValidateDocumentDto } from './dto/validate-document.dto';
 import { RejectDocumentDto } from './dto/reject-document.dto';
+import { UpdatePaymentStatusDto } from './dto/update-payment-status.dto';
 import { resolveSafeStorageFilePath } from '../../common/utils/storage-path.util';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/audit.model';
@@ -29,6 +30,7 @@ import {
   prepareTenantPdfStorageTarget,
 } from './helpers/document-storage.helper';
 import { buildDocumentSearchWhere } from './helpers/document-search.helper';
+import { DocumentFiscalChecksService } from './services/document-fiscal-checks.service';
 import { DocumentProcessingQueueService } from './services/document-processing-queue.service';
 import { DocumentUploadQueueService } from './services/document-upload-queue.service';
 import { TenantInboxWatcherService } from './services/tenant-inbox-watcher.service';
@@ -45,6 +47,7 @@ export class DocumentsService {
     private readonly auditService: AuditService,
     private readonly notificationsService: NotificationsService,
     private readonly tenantQuotasService: TenantQuotasService,
+    private readonly fiscalChecksService: DocumentFiscalChecksService,
     private readonly processingQueue: DocumentProcessingQueueService,
     private readonly uploadQueue: DocumentUploadQueueService,
     private readonly inboxWatcherService: TenantInboxWatcherService,
@@ -420,6 +423,17 @@ export class DocumentsService {
     if (dto.summary !== undefined) updatePayload.summary = dto.summary;
     if (dto.tags !== undefined) updatePayload.tags = dto.tags;
     if (dto.validationNotes !== undefined) updatePayload.validationNotes = dto.validationNotes;
+    if (dto.paymentStatus !== undefined) {
+      updatePayload.paymentStatus = dto.paymentStatus;
+      if (dto.paymentStatus === DocumentPaymentStatus.PAID) {
+        updatePayload.paidAt = dto.paidAt || doc.paidAt || new Date().toISOString().slice(0, 10);
+      } else if (dto.paymentStatus === DocumentPaymentStatus.PENDING || dto.paymentStatus === DocumentPaymentStatus.NOT_APPLICABLE) {
+        updatePayload.paidAt = null;
+      }
+    } else if (dto.paidAt !== undefined) {
+      updatePayload.paidAt = dto.paidAt;
+    }
+    if (dto.paymentReference !== undefined) updatePayload.paymentReference = dto.paymentReference;
     if (dto.items !== undefined) {
       updatePayload.items = dto.items;
       updatePayload.extractedData = {
@@ -439,6 +453,27 @@ export class DocumentsService {
         ...dto.extractedData,
       };
     }
+
+    const fiscalEval = await this.fiscalChecksService.evaluateDocument(
+      doc.companyId,
+      {
+        id: doc.id,
+        documentType: updatePayload.documentType ?? doc.documentType,
+        documentLetter: updatePayload.documentLetter ?? doc.documentLetter,
+        documentNumber: updatePayload.documentNumber ?? doc.documentNumber,
+        pointOfSale: updatePayload.pointOfSale ?? doc.pointOfSale,
+        issuerTaxId: updatePayload.issuerTaxId ?? doc.issuerTaxId,
+        recipientTaxId: updatePayload.recipientTaxId ?? doc.recipientTaxId,
+        netAmount: updatePayload.netAmount ?? doc.netAmount,
+        taxAmount: updatePayload.taxAmount ?? doc.taxAmount,
+        exemptAmount: updatePayload.exemptAmount ?? doc.exemptAmount,
+        otherTaxesAmount: updatePayload.otherTaxesAmount ?? doc.otherTaxesAmount,
+        totalAmount: updatePayload.totalAmount ?? doc.totalAmount,
+      },
+      doc.id,
+    );
+    updatePayload.duplicateOfDocumentId = fiscalEval.duplicateOfDocumentId;
+    updatePayload.validationWarnings = fiscalEval.validationWarnings;
 
     await doc.update(updatePayload);
 
@@ -503,6 +538,48 @@ export class DocumentsService {
 
     return {
       message: 'Documento marcado como rechazado',
+      document: doc,
+    };
+  }
+
+  async updatePaymentStatus(
+    id: number,
+    companyId: number,
+    userId: number,
+    dto: UpdatePaymentStatusDto,
+  ) {
+    const doc = await this.findById(id, companyId);
+    const nextPaidAt =
+      dto.paymentStatus === DocumentPaymentStatus.PAID
+        ? dto.paidAt || doc.paidAt || new Date().toISOString().slice(0, 10)
+        : dto.paymentStatus === DocumentPaymentStatus.PENDING ||
+            dto.paymentStatus === DocumentPaymentStatus.NOT_APPLICABLE
+          ? null
+          : dto.paidAt ?? doc.paidAt;
+
+    await doc.update({
+      paymentStatus: dto.paymentStatus,
+      paidAt: nextPaidAt,
+      paymentReference:
+        dto.paymentReference !== undefined ? dto.paymentReference || null : doc.paymentReference,
+    });
+
+    await this.auditService.log({
+      action: AuditAction.STATUS_CHANGE,
+      entity: 'Document',
+      entityId: doc.id,
+      companyId: doc.companyId,
+      userId,
+      payload: {
+        paymentStatus: dto.paymentStatus,
+        paidAt: nextPaidAt,
+        paymentReference: doc.paymentReference,
+      },
+      description: `Estado de pago de '${doc.originalName}' actualizado a ${dto.paymentStatus}`,
+    });
+
+    return {
+      message: 'Estado de pago actualizado correctamente',
       document: doc,
     };
   }

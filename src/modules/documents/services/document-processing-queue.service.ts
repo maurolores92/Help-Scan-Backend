@@ -1,8 +1,10 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { Op } from 'sequelize';
-import { Document, DocumentStatus } from '../document.model';
+import { Document, DocumentPaymentStatus, DocumentStatus } from '../document.model';
 import { DocumentAiExtractorService } from './document-ai-extractor.service';
+import { DocumentFiscalChecksService } from './document-fiscal-checks.service';
+import { resolveDefaultPaymentStatus } from '../helpers/document-fiscal-checks.helper';
 import { TenantQuotasService } from '../../plans/services/tenant-quotas.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { AuditService } from '../../audit/audit.service';
@@ -39,6 +41,7 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
     @InjectModel(Document)
     private readonly documentModel: typeof Document,
     private readonly extractorService: DocumentAiExtractorService,
+    private readonly fiscalChecksService: DocumentFiscalChecksService,
     private readonly tenantQuotasService: TenantQuotasService,
     private readonly notificationsService: NotificationsService,
     private readonly auditService: AuditService,
@@ -123,8 +126,35 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
           ? DocumentStatus.VALIDATED
           : DocumentStatus.PENDING_APPROVAL;
 
+      const fiscalEval = await this.fiscalChecksService.evaluateDocument(
+        doc.companyId,
+        {
+          id: doc.id,
+          documentType: extraction.documentType,
+          documentLetter: extraction.documentLetter,
+          documentNumber: extraction.documentNumber,
+          pointOfSale: extraction.pointOfSale,
+          issuerTaxId: extraction.issuerTaxId,
+          recipientTaxId: extraction.recipientTaxId,
+          netAmount: extraction.netAmount,
+          taxAmount: extraction.taxAmount,
+          exemptAmount: extraction.exemptAmount,
+          otherTaxesAmount: extraction.otherTaxesAmount,
+          totalAmount: extraction.totalAmount,
+        },
+        doc.id,
+      );
+
+      const defaultPaymentStatus =
+        doc.paymentStatus && doc.paymentStatus !== DocumentPaymentStatus.PENDING
+          ? doc.paymentStatus
+          : (resolveDefaultPaymentStatus(extraction.documentType) as DocumentPaymentStatus);
+
       await doc.update({
         status: nextStatus,
+        paymentStatus: defaultPaymentStatus,
+        duplicateOfDocumentId: fiscalEval.duplicateOfDocumentId,
+        validationWarnings: fiscalEval.validationWarnings,
         documentType: extraction.documentType,
         summary: extraction.summary,
         documentNumber: extraction.documentNumber,

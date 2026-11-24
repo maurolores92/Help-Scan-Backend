@@ -169,6 +169,12 @@ export class SyncService implements OnModuleInit {
       `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "validated_at" TIMESTAMP WITH TIME ZONE DEFAULT NULL;`,
       `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "validation_notes" TEXT DEFAULT NULL;`,
       `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "source_email_id" INTEGER DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "payment_status" VARCHAR(25) NOT NULL DEFAULT 'PENDING';`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "paid_at" DATE DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "payment_reference" VARCHAR(150) DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "due_alert_sent_at" TIMESTAMP WITH TIME ZONE DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "duplicate_of_document_id" INTEGER DEFAULT NULL;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "validation_warnings" JSONB DEFAULT '[]'::jsonb;`,
     ];
 
     for (const sql of statements) {
@@ -227,6 +233,8 @@ export class SyncService implements OnModuleInit {
       { table: 'documents', name: 'idx_documents_department', column: 'department' },
       { table: 'documents', name: 'idx_documents_recipient_tax_id', column: 'recipient_tax_id' },
       { table: 'documents', name: 'idx_documents_due_date', column: 'due_date' },
+      { table: 'documents', name: 'idx_documents_payment_status', column: 'payment_status' },
+      { table: 'documents', name: 'idx_documents_issuer_tax_id', column: 'issuer_tax_id' },
       { table: 'ftp_devices', name: 'idx_ftp_devices_company_id', column: 'company_id' },
       { table: 'ftp_devices', name: 'idx_ftp_devices_status', column: 'status' },
       { table: 'company_email_channels', name: 'idx_email_channels_company_id', column: 'company_id' },

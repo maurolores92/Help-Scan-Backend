@@ -1,6 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
 import { literal, Op, WhereOptions } from 'sequelize';
-import { Document } from '../document.model';
+import { Document, DocumentPaymentStatus } from '../document.model';
 import { QueryDocumentDto } from '../dto/query-document.dto';
 
 /**
@@ -21,6 +21,8 @@ export const buildDocumentSearchWhere = (
   const {
     search,
     status,
+    paymentStatus,
+    dueFilter,
     source,
     documentType,
     dateFrom,
@@ -37,6 +39,29 @@ export const buildDocumentSearchWhere = (
 
   if (status) {
     andConditions.push({ status });
+  }
+
+  if (paymentStatus) {
+    andConditions.push({ paymentStatus });
+  }
+
+  if (dueFilter === 'OVERDUE' || dueFilter === 'DUE_SOON') {
+    const today = new Date();
+    const todayIso = today.toISOString().slice(0, 10);
+    andConditions.push({
+      paymentStatus: { [Op.in]: [DocumentPaymentStatus.PENDING, DocumentPaymentStatus.SCHEDULED] },
+    });
+
+    if (dueFilter === 'OVERDUE') {
+      andConditions.push({ dueDate: { [Op.lt]: todayIso } });
+    } else {
+      const soon = new Date(today);
+      soon.setDate(soon.getDate() + 5);
+      const soonIso = soon.toISOString().slice(0, 10);
+      andConditions.push({
+        dueDate: { [Op.gte]: todayIso, [Op.lte]: soonIso },
+      });
+    }
   }
 
   if (source) {

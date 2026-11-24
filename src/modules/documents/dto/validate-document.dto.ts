@@ -1,5 +1,6 @@
 import {
   IsArray,
+  IsEnum,
   IsNumber,
   IsObject,
   IsOptional,
@@ -7,6 +8,7 @@ import {
   MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { DocumentPaymentStatus } from '../document.model';
 
 export class ValidateDocumentDto {
   @IsOptional()
@@ -181,4 +183,17 @@ export class ValidateDocumentDto {
   @IsOptional()
   @IsString()
   validationNotes?: string;
+
+  @IsOptional()
+  @IsEnum(DocumentPaymentStatus)
+  paymentStatus?: DocumentPaymentStatus;
+
+  @IsOptional()
+  @IsString()
+  paidAt?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  paymentReference?: string;
 }

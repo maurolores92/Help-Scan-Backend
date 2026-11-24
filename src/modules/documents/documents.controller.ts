@@ -20,9 +20,12 @@ import { AuthGuard } from '@nestjs/passport';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { DocumentsService } from './documents.service';
+import { DocumentExportService } from './services/document-export.service';
 import { QueryDocumentDto } from './dto/query-document.dto';
+import { ExportDocumentsQueryDto } from './dto/export-documents-query.dto';
 import { ValidateDocumentDto } from './dto/validate-document.dto';
 import { RejectDocumentDto } from './dto/reject-document.dto';
+import { UpdatePaymentStatusDto } from './dto/update-payment-status.dto';
 import { BulkDeleteDocumentsDto } from './dto/bulk-delete-documents.dto';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -43,7 +46,10 @@ import {
 @UseGuards(AuthGuard('jwt'), PermissionsGuard, TenantModuleGuard)
 @RequireTenantModule('documents')
 export class DocumentsController {
-  constructor(private readonly documentsService: DocumentsService) {}
+  constructor(
+    private readonly documentsService: DocumentsService,
+    private readonly documentExportService: DocumentExportService,
+  ) {}
 
   private assertTenantCompany(user: any): number {
     if (isPlatformSuperAdmin(user)) {
@@ -114,6 +120,22 @@ export class DocumentsController {
     return this.documentsService.getFacets(tenantCompanyId);
   }
 
+  @Get('export')
+  @RequirePermission('VIEW_DOCUMENTS')
+  async exportDocuments(
+    @GetUser() user: any,
+    @Query() query: ExportDocumentsQueryDto,
+    @Res() res: Response,
+  ) {
+    const tenantCompanyId = this.assertTenantCompany(user);
+    return this.documentExportService.exportDocuments(
+      tenantCompanyId,
+      user.id,
+      query,
+      res,
+    );
+  }
+
   @Get()
   @RequirePermission('VIEW_DOCUMENTS')
   findAll(@GetUser() user: any, @Query() query: QueryDocumentDto) {
@@ -155,6 +177,17 @@ export class DocumentsController {
   ) {
     const tenantCompanyId = this.assertTenantCompany(user);
     return this.documentsService.rejectDocument(id, tenantCompanyId, user.id, dto);
+  }
+
+  @Patch(':id/payment-status')
+  @RequirePermission('UPLOAD_DOCUMENT')
+  updatePaymentStatus(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdatePaymentStatusDto,
+    @GetUser() user: any,
+  ) {
+    const tenantCompanyId = this.assertTenantCompany(user);
+    return this.documentsService.updatePaymentStatus(id, tenantCompanyId, user.id, dto);
   }
 
   @Get(':id/file')

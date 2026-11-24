@@ -29,6 +29,20 @@ export enum DocumentStatus {
   ERROR = 'ERROR',
 }
 
+export enum DocumentPaymentStatus {
+  PENDING = 'PENDING',
+  SCHEDULED = 'SCHEDULED',
+  PAID = 'PAID',
+  NOT_APPLICABLE = 'NOT_APPLICABLE',
+}
+
+export interface DocumentValidationWarning {
+  code: 'DUPLICATE_FISCAL' | 'AMOUNT_MISMATCH' | 'INVALID_CUIT';
+  severity: 'warning' | 'error';
+  message: string;
+  relatedDocumentId?: number | null;
+}
+
 export const DocumentStatusInfo = {
   [DocumentStatus.PENDING]: { value: DocumentStatus.PENDING, label: 'En Cola OCR', color: 'secondary' },
   [DocumentStatus.PROCESSING]: { value: DocumentStatus.PROCESSING, label: 'Extrayendo con IA', color: 'info' },
@@ -499,6 +513,50 @@ export class Document extends Model {
     field: 'ftp_device_name',
   })
   declare ftpDeviceName: string | null;
+
+  @Column({
+    type: DataType.STRING(25),
+    allowNull: false,
+    defaultValue: DocumentPaymentStatus.PENDING,
+    field: 'payment_status',
+  })
+  declare paymentStatus: DocumentPaymentStatus;
+
+  @Column({
+    type: DataType.DATEONLY,
+    allowNull: true,
+    field: 'paid_at',
+  })
+  declare paidAt: string | null;
+
+  @Column({
+    type: DataType.STRING(150),
+    allowNull: true,
+    field: 'payment_reference',
+  })
+  declare paymentReference: string | null;
+
+  @Column({
+    type: DataType.DATE,
+    allowNull: true,
+    field: 'due_alert_sent_at',
+  })
+  declare dueAlertSentAt: Date | null;
+
+  @Column({
+    type: DataType.INTEGER,
+    allowNull: true,
+    field: 'duplicate_of_document_id',
+  })
+  declare duplicateOfDocumentId: number | null;
+
+  @Column({
+    type: DataType.JSONB,
+    allowNull: true,
+    defaultValue: [],
+    field: 'validation_warnings',
+  })
+  declare validationWarnings: DocumentValidationWarning[] | null;
 
   @Column(DataType.VIRTUAL)
   get statusInfo() {

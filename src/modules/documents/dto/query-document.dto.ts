@@ -1,6 +1,6 @@
-import { IsEnum, IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { IsEnum, IsIn, IsInt, IsOptional, IsString, Min } from 'class-validator';
 import { Type } from 'class-transformer';
-import { DocumentSource, DocumentStatus } from '../document.model';
+import { DocumentPaymentStatus, DocumentSource, DocumentStatus } from '../document.model';
 
 export class QueryDocumentDto {
   @IsOptional()
@@ -10,6 +10,14 @@ export class QueryDocumentDto {
   @IsOptional()
   @IsEnum(DocumentStatus)
   status?: DocumentStatus;
+
+  @IsOptional()
+  @IsEnum(DocumentPaymentStatus)
+  paymentStatus?: DocumentPaymentStatus;
+
+  @IsOptional()
+  @IsIn(['OVERDUE', 'DUE_SOON'])
+  dueFilter?: 'OVERDUE' | 'DUE_SOON';
 
   @IsOptional()
   @IsEnum(DocumentSource)

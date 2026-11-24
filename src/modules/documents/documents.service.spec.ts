@@ -9,6 +9,7 @@ import { Document, DocumentStatus } from './document.model';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TenantQuotasService } from '../plans/services/tenant-quotas.service';
+import { DocumentFiscalChecksService } from './services/document-fiscal-checks.service';
 import { DocumentProcessingQueueService } from './services/document-processing-queue.service';
 import { DocumentUploadQueueService } from './services/document-upload-queue.service';
 import { TenantInboxWatcherService } from './services/tenant-inbox-watcher.service';
@@ -19,6 +20,7 @@ describe('DocumentsService', () => {
   let auditServiceMock: any;
   let notificationsServiceMock: any;
   let tenantQuotasServiceMock: any;
+  let fiscalChecksServiceMock: any;
   let processingQueueMock: any;
   let uploadQueueMock: any;
   let inboxWatcherMock: any;
@@ -52,6 +54,13 @@ describe('DocumentsService', () => {
       recordPagesUploaded: jest.fn().mockResolvedValue(undefined),
     };
 
+    fiscalChecksServiceMock = {
+      evaluateDocument: jest.fn().mockResolvedValue({
+        duplicateOfDocumentId: null,
+        validationWarnings: [],
+      }),
+    };
+
     processingQueueMock = {
       enqueue: jest.fn(),
     };
@@ -72,6 +81,7 @@ describe('DocumentsService', () => {
         { provide: AuditService, useValue: auditServiceMock },
         { provide: NotificationsService, useValue: notificationsServiceMock },
         { provide: TenantQuotasService, useValue: tenantQuotasServiceMock },
+        { provide: DocumentFiscalChecksService, useValue: fiscalChecksServiceMock },
         { provide: DocumentProcessingQueueService, useValue: processingQueueMock },
         { provide: DocumentUploadQueueService, useValue: uploadQueueMock },
         { provide: TenantInboxWatcherService, useValue: inboxWatcherMock },
