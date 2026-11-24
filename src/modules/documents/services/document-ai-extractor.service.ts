@@ -8,6 +8,7 @@ import {
 } from '../helpers/local-pdf-heuristics.helper';
 
 const MIN_NATIVE_TEXT_LENGTH = 80;
+const MAX_GEMINI_VISION_PDF_BYTES = 15 * 1024 * 1024;
 
 const EXTRACTION_SYSTEM_PROMPT = `Eres un motor experto de análisis documental y extracción semántica empresarial multirubro, especializado en comprobantes fiscales, comerciales, técnicos y administrativos de Argentina y Latinoamérica.
 
@@ -26,6 +27,11 @@ INSTRUCCIONES CLAVE DE EXTRACCIÓN Y NORMALIZACIÓN:
      * "totalAmount": importe total final a pagar.
    - Ítems / Artículos: Extrae cada renglón de producto o servicio con { "code": string|null, "description": string, "quantity": number|null, "unitPrice": number|null, "subtotal": number|null }.
    - Equipos y Servicios Técnicos: Si el comprobante menciona impresoras, fotocopiadoras o máquinas (ej. HP LaserJet, Ricoh MP), extrae "equipmentId" (ej: "7016"), "equipmentModel" (ej: "HP LaserJet Managed E52645") y "meterCount" (contadores ej: "ACT:8 - ANT:7").
+   - Documentos escaneados, fotos o manuscritos (remitos / facturas manuales):
+     * Si recibes la imagen/PDF junto con texto OCR auxiliar, prioriza siempre lo que observas visualmente en la imagen del documento (el OCR puede omitir o deformar texto escrito a mano).
+     * Transcribe con cuidado renglones, cantidades, cliente, fecha, importes y persona firmante/receptora aunque estén en letra manuscrita.
+     * Si algún dato escrito a mano tiene tachaduras, papel carbónico borroso o trazos dudosos, reduce "aiConfidence" (por debajo de 0.75) e indícalo brevemente en "summary" para facilitar la validación manual.
+     * Cuando analices un documento visualmente (imagen/escaneo), incluye en "rawText" una transcripción legible completa (datos preimpresos + manuscritos) para indexación y búsqueda interna.
 
 Analiza el texto o documento y devuelve ESTRICTAMENTE un objeto JSON válido (sin bloques markdown ni explicaciones adicionales) con esta estructura exacta:
 {
@@ -67,6 +73,7 @@ Analiza el texto o documento y devuelve ESTRICTAMENTE un objeto JSON válido (si
   "involvedParties": [ { "name": "string", "role": "string", "identifier": "string|null" } ],
   "dates": { "vencimiento": "YYYY-MM-DD" },
   "amounts": { "subtotal": 0, "impuestos": 0 },
+  "rawText": "string o null (solo cuando analizas el PDF/imagen visualmente: transcripción completa legible de impreso + manuscrito)",
   "aiConfidence": 0.95
 }`;
 
@@ -164,18 +171,31 @@ export class DocumentAiExtractorService implements OnModuleInit {
       try {
         const pythonResult = await this.callPythonOcrService(fileBuffer, originalFileName, ocrUrl);
         if (pythonResult) {
-          // Si disponemos de GEMINI_API_KEY y no estamos en modo forzado 'local', pasamos el texto en bruto
-          // extraído por Python a Gemini 3.8 Flash para estructuración semántica de alta precisión del modal
+          // Si disponemos de GEMINI_API_KEY y no estamos en modo forzado 'local', complementamos OCR + Gemini:
+          // - PDFs digitales nativos ('python_pymupdf_native') -> gemini_text (rápido y económico)
+          // - Escaneos, fotos o manuscritos ('python_tesseract_ocr' o sin texto nativo) -> gemini_vision + texto OCR auxiliar
           if (apiKey && extractionMode !== 'local') {
             const rawTextToAnalyze = (pythonResult.rawText || nativeText || '').trim();
-            if (rawTextToAnalyze.length >= 15) {
+            const isRasterOrLowText =
+              pythonResult.extractionEngine === 'python_tesseract_ocr' ||
+              pythonResult.extractionEngine === 'python_ocr' ||
+              (!hasCleanNativeText && rawTextToAnalyze.length < MIN_NATIVE_TEXT_LENGTH);
+            const useVisionForPython =
+              isRasterOrLowText && fileBuffer.length <= MAX_GEMINI_VISION_PDF_BYTES;
+
+            if (useVisionForPython || rawTextToAnalyze.length >= 15) {
+              const targetMode: 'gemini_vision' | 'gemini_text' = useVisionForPython
+                ? 'gemini_vision'
+                : 'gemini_text';
+              const modeLog = useVisionForPython
+                ? `👁️ Documento escaneado/manuscrito (${pythonResult.extractionEngine}) para '${originalFileName}'. Complementando OCR (${rawTextToAnalyze.length} chars) con Gemini Vision...`
+                : `🧠 Enriqueciendo texto nativo OCR de Python con Gemini (${process.env.GEMINI_MODEL || 'gemini-3.5-flash'}) para '${originalFileName}' (${rawTextToAnalyze.length} caracteres)...`;
+
               try {
-                this.logger.log(
-                  `[DocumentAiExtractor] 🧠 Enriqueciendo texto OCR de Python con Gemini (${process.env.GEMINI_MODEL || 'gemini-3.8-flash'}) para '${originalFileName}' (${rawTextToAnalyze.length} caracteres)...`,
-                );
+                this.logger.log(`[DocumentAiExtractor] ${modeLog}`);
                 return await this.callGeminiExtractor({
                   apiKey,
-                  mode: 'gemini_text',
+                  mode: targetMode,
                   nativeText: rawTextToAnalyze,
                   fileBuffer,
                   originalFileName,
@@ -184,7 +204,7 @@ export class DocumentAiExtractorService implements OnModuleInit {
                 });
               } catch (geminiErr: any) {
                 this.logger.warn(
-                  `[DocumentAiExtractor] ⚠️ Falló estructuración Gemini (${geminiErr?.message}). Retornando extracción base de Python como fallback.`,
+                  `[DocumentAiExtractor] ⚠️ Falló ${targetMode} (${geminiErr?.message}). Retornando extracción base de Python como fallback.`,
                 );
                 return pythonResult;
               }
@@ -275,6 +295,11 @@ export class DocumentAiExtractorService implements OnModuleInit {
       ]),
     );
 
+    const auxiliaryOcrText = params.nativeText?.trim() || '';
+    const ocrSupportPrompt = auxiliaryOcrText
+      ? `\n\nTexto OCR auxiliar obtenido por Tesseract (útil para corroborar membretes o códigos impresos; puede omitir o confundir letra manuscrita, priorizá siempre lo que ves en la imagen del PDF):\n${auxiliaryOcrText.slice(0, 15000)}`
+      : '';
+
     const parts: any[] =
       params.mode === 'gemini_text'
         ? [
@@ -290,7 +315,7 @@ export class DocumentAiExtractorService implements OnModuleInit {
             },
           },
           {
-            text: `${EXTRACTION_SYSTEM_PROMPT}\n\nNombre original del archivo escaneado: ${params.originalFileName}`,
+            text: `${EXTRACTION_SYSTEM_PROMPT}\n\nNombre original del archivo escaneado: ${params.originalFileName}\nCantidad de páginas: ${params.pageCount}${ocrSupportPrompt}`,
           },
         ];
 
@@ -490,7 +515,10 @@ export class DocumentAiExtractorService implements OnModuleInit {
           ...(parsed.amounts && typeof parsed.amounts === 'object' ? parsed.amounts : {}),
         },
       },
-      rawText: params.nativeText || String(parsed.rawText || '').trim(),
+      rawText:
+        params.mode === 'gemini_vision'
+          ? String(parsed.rawText || '').trim() || params.nativeText
+          : params.nativeText || String(parsed.rawText || '').trim(),
       pageCount: params.pageCount,
       aiConfidence:
         typeof parsed.aiConfidence === 'number'

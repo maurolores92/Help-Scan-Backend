@@ -7,11 +7,13 @@ describe('DocumentAiExtractorService', () => {
   let service: DocumentAiExtractorService;
   const mockedPdfParse = pdfParse as unknown as jest.Mock;
   const originalApiKey = process.env.GEMINI_API_KEY;
+  const originalOcrUrl = process.env.OCR_SERVICE_URL;
   const originalFetch = global.fetch;
 
   beforeEach(() => {
     service = new DocumentAiExtractorService();
     delete process.env.GEMINI_API_KEY;
+    delete process.env.OCR_SERVICE_URL;
   });
 
   afterEach(() => {
@@ -20,6 +22,11 @@ describe('DocumentAiExtractorService', () => {
       process.env.GEMINI_API_KEY = originalApiKey;
     } else {
       delete process.env.GEMINI_API_KEY;
+    }
+    if (originalOcrUrl !== undefined) {
+      process.env.OCR_SERVICE_URL = originalOcrUrl;
+    } else {
+      delete process.env.OCR_SERVICE_URL;
     }
     global.fetch = originalFetch;
   });
@@ -271,6 +278,182 @@ describe('DocumentAiExtractorService', () => {
       precioFinal: 17000,
       ivaPorcentaje: null,
     });
+  });
+
+  it('debe usar gemini_text sin visión cuando OCR Python reporta PDF digital nativo (python_pymupdf_native)', async () => {
+    process.env.OCR_SERVICE_URL = 'http://localhost:8000';
+    process.env.GEMINI_API_KEY = 'fake-gemini-key';
+    const nativeDigitalText =
+      'FACTURA ELECTRONICA A 00008-00041980 RAZON SOCIAL: PROVEEDOR DIGITAL SRL CUIT: 30-70999888-1 TOTAL $ 125000';
+    mockedPdfParse.mockResolvedValueOnce({
+      numpages: 1,
+      text: nativeDigitalText,
+    });
+
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          documentType: 'factura',
+          summary: 'Factura digital nativa',
+          rawText: nativeDigitalText,
+          pageCount: 1,
+          extractionEngine: 'python_pymupdf_native',
+          items: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          usageMetadata: { totalTokenCount: 950 },
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      documentType: 'factura_a',
+                      summary: 'Factura electrónica emitida por Proveedor Digital SRL.',
+                      documentNumber: '00008-00041980',
+                      issuerName: 'PROVEEDOR DIGITAL SRL',
+                      totalAmount: 125000,
+                      items: [],
+                      aiConfidence: 0.98,
+                    }),
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      });
+    global.fetch = fetchMock as any;
+
+    const result = await service.extractFromBuffer(
+      Buffer.from('%PDF-1.4 digital'),
+      'factura_digital.pdf',
+    );
+
+    expect(result.extractionEngine).toBe('gemini_text');
+    expect(result.documentNumber).toBe('00008-00041980');
+    expect(result.tokensUsed).toBe(950);
+    const geminiBody = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(geminiBody.contents[0].parts).toHaveLength(1);
+    expect(geminiBody.contents[0].parts[0].inlineData).toBeUndefined();
+  });
+
+  it('debe combinar OCR Python (python_tesseract_ocr) con gemini_vision en remitos/facturas escaneados o manuscritos', async () => {
+    process.env.OCR_SERVICE_URL = 'http://localhost:8000';
+    process.env.GEMINI_API_KEY = 'fake-gemini-key';
+    mockedPdfParse.mockResolvedValueOnce({
+      numpages: 1,
+      text: '',
+    });
+
+    const tesseractHeaderOnly =
+      'IMPRENTA SUR - REMITO R Nro 0001-00001234 - CUIT 30-71112223-4 - Senores:';
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          documentType: 'remito',
+          summary: 'Remito escaneado parcial',
+          issuerTaxId: '30-71112223-4',
+          rawText: tesseractHeaderOnly,
+          pageCount: 1,
+          extractionEngine: 'python_tesseract_ocr',
+          items: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          usageMetadata: { totalTokenCount: 2150 },
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      documentType: 'remito',
+                      summary: 'Remito manual entregado a Ferretería Norte con 2 ítems manuscritos.',
+                      documentNumber: '00001-00001234',
+                      issuerTaxId: '30-71112223-4',
+                      recipientName: 'Ferretería Norte',
+                      responsiblePerson: 'Juan Pérez',
+                      items: [
+                        { description: 'Resma A4 75g', quantity: 10 },
+                        { description: 'Tóner HP 85A', quantity: 2 },
+                      ],
+                      rawText:
+                        'REMITO R 0001-00001234 Señores: Ferretería Norte | 10 Resma A4 75g | 2 Tóner HP 85A | Recibió: Juan Pérez',
+                      aiConfidence: 0.89,
+                    }),
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      });
+    global.fetch = fetchMock as any;
+
+    const result = await service.extractFromBuffer(
+      Buffer.from('%PDF-1.4 scanned handwritten'),
+      'remito_manuscrito.pdf',
+    );
+
+    expect(result.extractionEngine).toBe('gemini_vision');
+    expect(result.recipientName).toBe('Ferretería Norte');
+    expect(result.responsiblePerson).toBe('Juan Pérez');
+    expect(result.items).toHaveLength(2);
+    expect(result.rawText).toContain('Ferretería Norte');
+    expect(result.tokensUsed).toBe(2150);
+
+    const geminiBody = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(geminiBody.contents[0].parts[0].inlineData.mimeType).toBe('application/pdf');
+    expect(geminiBody.contents[0].parts[1].text).toContain('Texto OCR auxiliar obtenido por Tesseract');
+    expect(geminiBody.contents[0].parts[1].text).toContain('30-71112223-4');
+  });
+
+  it('debe devolver la extracción base de Python si Gemini Vision falla en un escaneo', async () => {
+    process.env.OCR_SERVICE_URL = 'http://localhost:8000';
+    process.env.GEMINI_API_KEY = 'fake-gemini-key';
+    mockedPdfParse.mockResolvedValueOnce({
+      numpages: 1,
+      text: '',
+    });
+
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          documentType: 'remito',
+          summary: 'Extracción base OCR',
+          issuerTaxId: '30-71112223-4',
+          rawText: 'REMITO R 0001-00009999 CUIT 30-71112223-4',
+          pageCount: 1,
+          extractionEngine: 'python_tesseract_ocr',
+          items: [],
+        }),
+      })
+      .mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: async () => 'Gemini internal error',
+      });
+    global.fetch = fetchMock as any;
+
+    const result = await service.extractFromBuffer(
+      Buffer.from('%PDF-1.4 scanned fallback'),
+      'remito_fallback.pdf',
+    );
+
+    expect(result.extractionEngine).toBe('python_tesseract_ocr');
+    expect(result.issuerTaxId).toBe('30-71112223-4');
   });
 });
 
