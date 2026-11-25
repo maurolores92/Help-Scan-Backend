@@ -1,4 +1,4 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
@@ -9,9 +9,11 @@ describe('AuthService & JwtStrategy (Sesión Única por Usuario)', () => {
     jest.restoreAllMocks();
   });
 
-  it('genera sessionId único al hacer login (incluido superadmin) y revoca sesiones previas por WebSocket', async () => {
+  it('bloquea con 409 ACTIVE_SESSION_EXISTS si ya hay sesión vigente y permite tomarla con forceTakeover=true (incluido superadmin)', async () => {
     const userInstance = {
       id: 1,
+      activeSessionId: 'existing-active-session',
+      activeSessionExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
       update: jest.fn().mockResolvedValue(undefined),
     };
     jest.spyOn(Users, 'findByPk').mockResolvedValue(userInstance as any);
@@ -42,15 +44,26 @@ describe('AuthService & JwtStrategy (Sesión Única por Usuario)', () => {
     };
 
     const service = new AuthService(usersServiceMock, jwtServiceMock, gatewayMock);
+
+    // 1. Primer intento sin forceTakeover -> debe bloquear y NO expulsar aún
+    await expect(
+      service.signIn({ username: 'superadmin', password: 'secret' }),
+    ).rejects.toThrow(ConflictException);
+    expect(userInstance.update).not.toHaveBeenCalled();
+    expect(gatewayMock.emitSessionReplaced).not.toHaveBeenCalled();
+
+    // 2. Confirmado con forceTakeover=true -> reemplaza activeSessionId y expulsa sesión previa
     const res = await service.signIn({
       username: 'superadmin',
       password: 'secret',
+      forceTakeover: true,
     });
 
     expect(res.accessToken).toBe('signed-jwt-token');
     expect(userInstance.update).toHaveBeenCalledWith(
       expect.objectContaining({
         activeSessionId: expect.any(String),
+        activeSessionExpiresAt: expect.any(Date),
       }),
     );
     const generatedSessionId = userInstance.update.mock.calls[0][0].activeSessionId;
@@ -63,6 +76,22 @@ describe('AuthService & JwtStrategy (Sesión Única por Usuario)', () => {
       expect.any(Object),
     );
     expect(gatewayMock.emitSessionReplaced).toHaveBeenCalledWith(1, generatedSessionId);
+  });
+
+  it('logout revoca activeSessionId para invalidar JWT actual y liberar el siguiente login', async () => {
+    const updateSpy = jest.spyOn(Users, 'update').mockResolvedValue([1] as any);
+    const service = new AuthService({} as any, {} as any);
+
+    const res = await service.logout(5);
+
+    expect(res).toEqual({ success: true });
+    expect(updateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activeSessionId: expect.stringMatching(/^revoked:/),
+        activeSessionExpiresAt: null,
+      }),
+      { where: { id: 5 } },
+    );
   });
 
   it('JwtStrategy rechaza con SESSION_REPLACED tokens de una sesión previa cerrada', async () => {

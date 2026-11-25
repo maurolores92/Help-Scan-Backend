@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Optional,
   UnauthorizedException,
@@ -83,13 +84,34 @@ export class AuthService {
       throw new UnauthorizedException('Contraseña incorrecta');
     }
 
+    const sessionTtlMs = 24 * 60 * 60 * 1000;
+    const userInstance = await Users.findByPk(user.id);
+    const currentSessionId = userInstance?.activeSessionId || '';
+    const currentSessionExpiresAt = userInstance?.activeSessionExpiresAt
+      ? new Date(userInstance.activeSessionExpiresAt).getTime()
+      : null;
+
+    const hasActiveSession =
+      Boolean(currentSessionId) &&
+      !currentSessionId.startsWith('revoked:') &&
+      (currentSessionExpiresAt === null || currentSessionExpiresAt > Date.now());
+
+    if (hasActiveSession && !data.forceTakeover) {
+      throw new ConflictException({
+        code: 'ACTIVE_SESSION_EXISTS',
+        message:
+          'Ya existe una sesión activa con esta cuenta en otro navegador o dispositivo. ¿Querés cerrarla e iniciar sesión aquí?',
+      });
+    }
+
     // Generar sesión única: invalida cualquier sesión previa (incluye superadmin)
     const sessionId = randomUUID();
-    const userInstance = await Users.findByPk(user.id);
+    const sessionExpiresAt = new Date(Date.now() + sessionTtlMs);
     if (userInstance) {
       await userInstance.update({
         lastLoginAt: new Date(),
         activeSessionId: sessionId,
+        activeSessionExpiresAt: sessionExpiresAt,
       });
     }
 
@@ -158,6 +180,7 @@ export class AuthService {
       isAdmin: true,
       status: 'ACTIVE',
       activeSessionId: sessionId,
+      activeSessionExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     } as any);
 
     const payload = {
@@ -268,6 +291,20 @@ export class AuthService {
     }
   }
 
+  async logout(userId: number): Promise<{ success: boolean }> {
+    if (!userId || isNaN(userId)) {
+      return { success: false };
+    }
+    await Users.update(
+      {
+        activeSessionId: `revoked:${randomUUID()}`,
+        activeSessionExpiresAt: null,
+      },
+      { where: { id: userId } },
+    );
+    return { success: true };
+  }
+
   /**
    * Registro público de autoservicio con prueba gratuita de 6 días.
    * Crea la compañía (Tenant), asigna el plan de prueba y crea el usuario admin inicial.
@@ -368,6 +405,7 @@ export class AuthService {
       isAdmin: true,
       status: UserStatus.ACTIVE,
       activeSessionId: sessionId,
+      activeSessionExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     } as any);
 
     // 7. Generar token de sesión

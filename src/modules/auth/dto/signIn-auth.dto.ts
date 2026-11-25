@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsBoolean, IsNotEmpty, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class SignInAuthDto {
   @IsNotEmpty({ message: 'El usuario es obligatorio' })
@@ -9,4 +9,8 @@ export class SignInAuthDto {
   @MinLength(6, { message: 'La contraseña debe tener al menos 6 caracteres' })
   @MaxLength(20, { message: 'La contraseña no debe superar los 20 caracteres' })
   password: string;
+
+  @IsOptional()
+  @IsBoolean()
+  forceTakeover?: boolean;
 }

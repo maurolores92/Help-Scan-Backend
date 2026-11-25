@@ -34,6 +34,13 @@ export class AuthController {
     return await this.authService.signIn(signInDto);
   }
 
+  @Auth()
+  @Post('logout')
+  @HttpCode(HttpStatus.OK)
+  async logout(@GetUser() user: any) {
+    return await this.authService.logout(Number(user?.id));
+  }
+
   /**
    * Registro público de prueba gratuita de 6 días desde la web landing page.
    * Valida teléfono y correo obligatorios y crea tenant + admin con plan trial.

@@ -105,6 +105,9 @@ export class Users extends Model {
   @Column({ type: DataType.STRING(64), allowNull: true, field: 'active_session_id' })
   declare activeSessionId: string | null;
 
+  @Column({ type: DataType.DATE, allowNull: true, field: 'active_session_expires_at' })
+  declare activeSessionExpiresAt: Date | null;
+
   @BeforeCreate
   @BeforeUpdate
   static async hashPasswordHook(instance: Users) {
