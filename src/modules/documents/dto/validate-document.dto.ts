@@ -1,6 +1,7 @@
 import {
   IsArray,
   IsEnum,
+  IsInt,
   IsNumber,
   IsObject,
   IsOptional,
@@ -181,6 +182,10 @@ export class ValidateDocumentDto {
   extractedData?: Record<string, any>;
 
   @IsOptional()
+  @IsObject()
+  formData?: Record<string, any>;
+
+  @IsOptional()
   @IsString()
   validationNotes?: string;
 
@@ -196,4 +201,9 @@ export class ValidateDocumentDto {
   @IsString()
   @MaxLength(150)
   paymentReference?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  clientId?: number | null;
 }

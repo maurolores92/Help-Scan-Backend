@@ -1,0 +1,101 @@
+import { CURRENCY_OPTIONS, DefaultDocumentFormSeed } from './form-shared.constants';
+
+export const PRESUPUESTO_FORM_SEED: DefaultDocumentFormSeed = {
+  code: 'presupuesto',
+  label: 'Presupuesto / Cotización',
+  description:
+    'Documento comercial no fiscal para cotizaciones de productos o servicios, con validez de oferta y condición impositiva (+IVA o Final).',
+  icon: 'tabler:calculator',
+  displayOrder: 2,
+  version: 1,
+  matchAliases: ['presupuesto', 'cotizacion', 'cotización', 'proforma', 'quotation'],
+  aiExtractionGuide:
+    'Documento comercial NO válido como factura (sin CAE). Identificar quién emite la cotización vs el cliente destinatario. Indicar si los precios expresados son "+ IVA" o "IVA incluido", días de validez de oferta, plazo de entrega y total cotizado respetando separador de miles argentino.',
+  sectionsSchema: [
+    {
+      id: 'quote_header',
+      title: '1. Datos del Presupuesto (No válido como factura)',
+      icon: 'tabler:calculator',
+      fields: [
+        { key: 'documentNumber', target: 'core', label: 'N° de Presupuesto', fieldType: 'text', colSpan: 4, placeholder: 'Ej: PRE-00142' },
+        { key: 'documentDate', target: 'core', label: 'Fecha de Emisión', fieldType: 'date', colSpan: 4, required: true },
+        { key: 'dueDate', target: 'core', label: 'Válido Hasta', fieldType: 'date', colSpan: 4 },
+        {
+          key: 'validityDays',
+          target: 'custom',
+          label: 'Validez de Oferta (días / texto)',
+          fieldType: 'text',
+          colSpan: 4,
+          placeholder: 'Ej: 5 días hábiles, 15 días',
+          aiAttrKeys: ['validez_oferta', 'validez'],
+        },
+        {
+          key: 'deliveryLeadTime',
+          target: 'custom',
+          label: 'Plazo de Entrega / Ejecución',
+          fieldType: 'text',
+          colSpan: 4,
+          placeholder: 'Ej: Inmediato, 7 días hábiles',
+          aiAttrKeys: ['plazo_entrega'],
+        },
+        { key: 'referenceNumber', target: 'core', label: 'Referencia / Solicitud', fieldType: 'text', colSpan: 4, placeholder: 'N° pedido o referencia interna' },
+      ],
+    },
+    {
+      id: 'quote_parties',
+      title: '2. Emisor y Cliente Destinatario',
+      icon: 'tabler:users',
+      fields: [
+        { key: 'issuerName', target: 'core', label: 'Emisor / Oferente', fieldType: 'text', colSpan: 7 },
+        { key: 'issuerTaxId', target: 'core', label: 'CUIT Emisor', fieldType: 'cuit', colSpan: 5 },
+        { key: 'recipientName', target: 'core', label: 'Cliente / Destinatario', fieldType: 'text', colSpan: 7, required: true },
+        { key: 'recipientTaxId', target: 'core', label: 'CUIT / CUIL / DNI Cliente', fieldType: 'cuit', colSpan: 5 },
+        { key: 'responsiblePerson', target: 'core', label: 'Contacto / Solicitante', fieldType: 'text', colSpan: 4 },
+        { key: 'recipientPhone', target: 'core', label: 'Teléfono', fieldType: 'text', colSpan: 4 },
+        { key: 'recipientEmail', target: 'core', label: 'Email', fieldType: 'text', colSpan: 4 },
+        { key: 'deliveryAddress', target: 'core', label: 'Domicilio / Lugar de Entrega', fieldType: 'text', colSpan: 12 },
+      ],
+    },
+    {
+      id: 'quote_amounts',
+      title: '3. Moneda, Condición Impositiva e Importes',
+      icon: 'tabler:currency-dollar',
+      fields: [
+        { key: 'currency', target: 'core', label: 'Moneda', fieldType: 'select', colSpan: 3, defaultValue: 'ARS', options: CURRENCY_OPTIONS },
+        {
+          key: 'taxInclusionMode',
+          target: 'custom',
+          label: 'Expresión de Precios',
+          fieldType: 'select',
+          colSpan: 5,
+          options: ['Precios + IVA (Neto)', 'Precios Finales (IVA Incluido)', 'Exento / Sin IVA'],
+          aiAttrKeys: ['condicion_precios_iva', 'precios_iva'],
+        },
+        {
+          key: 'discountDetail',
+          target: 'custom',
+          label: 'Descuento / Bonificación',
+          fieldType: 'text',
+          colSpan: 4,
+          placeholder: 'Ej: 10% pago contado',
+          aiAttrKeys: ['descuento', 'bonificacion'],
+        },
+        { key: 'netAmount', target: 'core', label: 'Subtotal Neto', fieldType: 'currency', colSpan: 4 },
+        { key: 'taxAmount', target: 'core', label: 'IVA Estimado', fieldType: 'currency', colSpan: 4 },
+        { key: 'totalAmount', target: 'core', label: 'Importe Total Cotizado', fieldType: 'currency', colSpan: 4, required: true },
+        { key: 'paymentTerms', target: 'core', label: 'Forma / Condición de Pago', fieldType: 'text', colSpan: 6 },
+        { key: 'exchangeRate', target: 'custom', label: 'Cotización / Tipo Cambio Ref.', fieldType: 'number', colSpan: 6, aiAttrKeys: ['tipo_cambio', 'cotizacion'] },
+      ],
+    },
+    {
+      id: 'quote_items',
+      title: '4. Ítems Cotizados y Observaciones',
+      icon: 'tabler:list-details',
+      fields: [
+        { key: 'items', target: 'core', label: 'Artículos', fieldType: 'items_table', colSpan: 12 },
+        { key: 'summary', target: 'core', label: 'Alcance / Resumen', fieldType: 'textarea', colSpan: 6 },
+        { key: 'validationNotes', target: 'core', label: 'Notas Internas', fieldType: 'textarea', colSpan: 6 },
+      ],
+    },
+  ],
+};

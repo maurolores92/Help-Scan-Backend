@@ -125,7 +125,12 @@ const parseAmountValue = (raw: string): number | null => {
   if (lastComma > lastDot) {
     normalized = cleaned.replace(/\./g, '').replace(',', '.');
   } else if (lastDot > lastComma) {
-    normalized = cleaned.replace(/,/g, '');
+    // En es-AR/LATAM, grupos de miles exactos sin coma (ej: 154.200, 36.500, 1.250.000) son enteros, no decimales
+    if (lastComma === -1 && /^\d{1,3}(?:\.\d{3})+$/.test(cleaned)) {
+      normalized = cleaned.replace(/\./g, '');
+    } else {
+      normalized = cleaned.replace(/,/g, '');
+    }
   }
 
   const num = Number(normalized);
@@ -488,10 +493,18 @@ export const extractUniversalHeuristicsFromText = (
     return trimmed.length >= 2 ? trimmed : null;
   };
 
-  // Emisor / Proveedor (priorizando membrete superior antes del bloque cliente)
-  const issuerMatch =
-    cleanText.match(/(?:proveedor|emisor|empresa)\s*:\s*([^\n]{3,90})/i) ||
-    headerBlock.match(/(?:raz[oó]n\s+social|denominaci[oó]n)\s*:\s*([^\n]{3,90})/i);
+  const hasExplicitClientBlock = Boolean(clientBlockText);
+  const hasFiscalIssuerHeader =
+    /\b(?:punto\s+de\s+venta|pto\.?\s*vta|ingresos\s+brutos|inicio\s+de\s+actividades|domicilio\s+comercial|original|duplicado|c\.?a\.?e\.?)\b/i.test(
+      headerBlock,
+    );
+
+  // Emisor / Proveedor: solo tomar "Razón social:" del header si hay bloque de cliente abajo o cabecera fiscal AFIP;
+  // en presupuestos/notas sin bloque cliente aparte, "Razón social:" corresponde al destinatario.
+  let issuerMatch = cleanText.match(/(?:proveedor|emisor|empresa)\s*:\s*([^\n]{3,90})/i);
+  if (!issuerMatch && (hasExplicitClientBlock || hasFiscalIssuerHeader)) {
+    issuerMatch = headerBlock.match(/(?:raz[oó]n\s+social|denominaci[oó]n)\s*:\s*([^\n]{3,90})/i);
+  }
   let issuerName = cleanPartyName(issuerMatch?.[1]);
   if (!issuerName && /HELP\s*COPIES/i.test(headerBlock)) {
     issuerName = 'HELP COPIES S.R.L.';
@@ -500,6 +513,9 @@ export const extractUniversalHeuristicsFromText = (
     const headerLines = headerBlock.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 12);
     for (const hLine of headerLines) {
       if (/^(?:factura|remito|presupuesto|nota\s+de|recibo|orden\s+de|original|duplicado|triplicado|afip|arca|comprobante|fecha|cuit|punto\s+de\s+venta|ingresos\s+brutos|iva\b)/i.test(hLine)) {
+        continue;
+      }
+      if (/^(?:raz[oó]n\s+social|cliente|se[ñn]or(?:es)?)\s*:/i.test(hLine)) {
         continue;
       }
       if (/\b(?:S\.?\s*A\.?\s*S?\.?|S\.?\s*R\.?\s*L\.?|S\.?\s*C\.?\s*A\.?|S\.?\s*H\.?|COOPERATIVA|FUNDACI[OÓ]N|ASOCIACI[OÓ]N)\b/i.test(hLine)) {
@@ -513,13 +529,16 @@ export const extractUniversalHeuristicsFromText = (
   }
 
   // Cliente / Destinatario / Receptor (nunca capturar la Razón Social del encabezado emisor)
-  const recipientMatch =
-    cleanText.match(
-      /(?:apellido\s+y\s+nombre(?:\s*\/\s*raz[oó]n\s+social)?|se[ñn]or(?:es)?|cliente|destinatario|comprador)[:\s]*([^\n\r]{3,90})/i,
-    ) ||
-    (clientBlockText
-      ? clientBlockText.match(/raz[oó]n\s+social[:\s]*([^\n\r]{3,90})/i)
-      : null);
+  let recipientMatch = cleanText.match(
+    /(?:apellido\s+y\s+nombre(?:\s*\/\s*raz[oó]n\s+social)?|se[ñn]or(?:es)?|cliente|destinatario|comprador)[:\s]*([^\n\r]{3,90})/i,
+  );
+  if (!recipientMatch) {
+    if (clientBlockText) {
+      recipientMatch = clientBlockText.match(/raz[oó]n\s+social[:\s]*([^\n\r]{3,90})/i);
+    } else if (!hasFiscalIssuerHeader) {
+      recipientMatch = cleanText.match(/raz[oó]n\s+social[:\s]*([^\n\r]{3,90})/i);
+    }
+  }
   let recipientName = cleanPartyName(recipientMatch?.[1]);
   if (recipientName && issuerName && recipientName.toLowerCase() === issuerName.toLowerCase()) {
     recipientName = null;

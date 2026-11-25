@@ -21,6 +21,7 @@ import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { DocumentsService } from './documents.service';
 import { DocumentExportService } from './services/document-export.service';
+import { DocumentFormsService } from './services/document-forms.service';
 import { QueryDocumentDto } from './dto/query-document.dto';
 import { ExportDocumentsQueryDto } from './dto/export-documents-query.dto';
 import { ValidateDocumentDto } from './dto/validate-document.dto';
@@ -49,6 +50,7 @@ export class DocumentsController {
   constructor(
     private readonly documentsService: DocumentsService,
     private readonly documentExportService: DocumentExportService,
+    private readonly documentFormsService: DocumentFormsService,
   ) {}
 
   private assertTenantCompany(user: any): number {
@@ -109,8 +111,9 @@ export class DocumentsController {
 
   @Get('queue-status')
   @RequirePermission('VIEW_DOCUMENTS')
-  getQueueStatus() {
-    return this.documentsService.getUploadQueueStatus();
+  getQueueStatus(@GetUser() user: any) {
+    const tenantCompanyId = this.assertTenantCompany(user);
+    return this.documentsService.getCompanyQueueStatus(tenantCompanyId);
   }
 
   @Get('facets')
@@ -118,6 +121,23 @@ export class DocumentsController {
   getFacets(@GetUser() user: any) {
     const tenantCompanyId = this.assertTenantCompany(user);
     return this.documentsService.getFacets(tenantCompanyId);
+  }
+
+  @Get('forms')
+  @RequirePermission('VIEW_DOCUMENTS')
+  getAvailableForms(@GetUser() user: any) {
+    const tenantCompanyId = this.assertTenantCompany(user);
+    return this.documentFormsService.listAvailableForms(tenantCompanyId);
+  }
+
+  @Get('forms/:documentType')
+  @RequirePermission('VIEW_DOCUMENTS')
+  resolveFormByType(
+    @Param('documentType') documentType: string,
+    @GetUser() user: any,
+  ) {
+    const tenantCompanyId = this.assertTenantCompany(user);
+    return this.documentFormsService.resolveFormByDocumentType(tenantCompanyId, documentType);
   }
 
   @Get('export')

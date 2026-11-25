@@ -158,6 +158,34 @@ export const permissionsData = [
   },
 
   // ==========================================
+  // CLIENTES
+  // ==========================================
+  {
+    name: 'VIEW_CLIENTS',
+    displayName: 'Ver Clientes',
+    description: 'Permite visualizar la cartera de clientes y los comprobantes asociados por CUIL/CUIT',
+    categoria: CategoriaPermiso.DOCUMENTS,
+  },
+  {
+    name: 'CREATE_CLIENT',
+    displayName: 'Crear Clientes',
+    description: 'Permite registrar nuevos clientes y asociar comprobantes automáticamente por CUIL/CUIT',
+    categoria: CategoriaPermiso.DOCUMENTS,
+  },
+  {
+    name: 'UPDATE_CLIENT',
+    displayName: 'Editar Clientes',
+    description: 'Permite editar datos fiscales y sincronizar documentos asociados a cada cliente',
+    categoria: CategoriaPermiso.DOCUMENTS,
+  },
+  {
+    name: 'DELETE_CLIENT',
+    displayName: 'Eliminar Clientes',
+    description: 'Permite eliminar clientes registrados de la compañía',
+    categoria: CategoriaPermiso.DOCUMENTS,
+  },
+
+  // ==========================================
   // AUDITORÍA
   // ==========================================
   {

@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { col, fn, Op } from 'sequelize';
@@ -14,6 +15,8 @@ import {
   writeEncryptedVaultFile,
 } from '../../common/utils/vault-crypto.util';
 import { Document, DocumentPaymentStatus, DocumentSource, DocumentStatus } from './document.model';
+import { DocumentFormRecord } from './models/document-form-record.model';
+import { DocumentFormsService } from './services/document-forms.service';
 import { QueryDocumentDto } from './dto/query-document.dto';
 import { ValidateDocumentDto } from './dto/validate-document.dto';
 import { RejectDocumentDto } from './dto/reject-document.dto';
@@ -23,6 +26,8 @@ import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/audit.model';
 import { NotificationsService } from '../notifications/notifications.service';
 import { Company } from '../companies/company.model';
+import { Client } from '../clients/client.model';
+import { ClientsService } from '../clients/clients.service';
 import { TenantQuotasService } from '../plans/services/tenant-quotas.service';
 import {
   assertValidPdfUpload,
@@ -51,6 +56,8 @@ export class DocumentsService {
     private readonly processingQueue: DocumentProcessingQueueService,
     private readonly uploadQueue: DocumentUploadQueueService,
     private readonly inboxWatcherService: TenantInboxWatcherService,
+    @Optional() private readonly clientsService?: ClientsService,
+    @Optional() private readonly documentFormsService?: DocumentFormsService,
   ) {}
 
   private assertValidCompanyScope(companyId?: number | null): number {
@@ -65,6 +72,17 @@ export class DocumentsService {
 
   getUploadQueueStatus() {
     return this.uploadQueue.getStatus();
+  }
+
+  async getCompanyQueueStatus(companyId: number) {
+    const scopedCompanyId = this.assertValidCompanyScope(companyId);
+    const snapshot = await this.processingQueue.getCompanyQueueSnapshot(scopedCompanyId);
+    const uploadStatus = this.uploadQueue.getStatus();
+    return {
+      ...uploadStatus,
+      ...snapshot,
+      isProcessing: snapshot.isProcessing || uploadStatus.isProcessing,
+    };
   }
 
   async uploadFromApp(
@@ -163,6 +181,7 @@ export class DocumentsService {
         });
 
         this.processingQueue.enqueue(document.id, user.id);
+        void this.processingQueue.emitCompanyQueueSnapshot?.(user.companyId);
 
         return document;
       },
@@ -322,6 +341,7 @@ export class DocumentsService {
         });
 
         this.processingQueue.enqueue(document.id, params.actorUserId ?? undefined);
+        void this.processingQueue.emitCompanyQueueSnapshot?.(companyId);
 
         return { document, isDuplicate: false };
       },
@@ -475,7 +495,76 @@ export class DocumentsService {
     updatePayload.duplicateOfDocumentId = fiscalEval.duplicateOfDocumentId;
     updatePayload.validationWarnings = fiscalEval.validationWarnings;
 
+    if (dto.clientId !== undefined) {
+      if (dto.clientId === null) {
+        updatePayload.clientId = null;
+      } else {
+        if (this.clientsService) {
+          await this.clientsService.findById(dto.clientId, doc.companyId);
+        }
+        updatePayload.clientId = dto.clientId;
+      }
+    } else if (
+      this.clientsService &&
+      (dto.recipientTaxId !== undefined || dto.recipientName !== undefined || dto.issuerTaxId !== undefined || !doc.clientId)
+    ) {
+      const matchedClient = await this.clientsService
+        .resolveOrCreateClientForDocument(doc.companyId, {
+          recipientName: updatePayload.recipientName ?? doc.recipientName,
+          recipientTaxId: updatePayload.recipientTaxId ?? doc.recipientTaxId,
+          recipientEmail: updatePayload.recipientEmail ?? doc.recipientEmail,
+          recipientPhone: updatePayload.recipientPhone ?? doc.recipientPhone,
+          deliveryAddress: updatePayload.deliveryAddress ?? doc.deliveryAddress,
+          responsiblePerson: updatePayload.responsiblePerson ?? doc.responsiblePerson,
+          taxCondition: updatePayload.taxCondition ?? doc.taxCondition,
+          paymentTerms: updatePayload.paymentTerms ?? doc.paymentTerms,
+          issuerTaxId: updatePayload.issuerTaxId ?? doc.issuerTaxId,
+          rawText: doc.rawText,
+          extractedData: updatePayload.extractedData ?? doc.extractedData,
+          sourceDocumentName: doc.originalName,
+          actorUserId: userId,
+        })
+        .catch(() => null);
+      if (matchedClient) {
+        updatePayload.clientId = matchedClient.id;
+      }
+    }
+
+    let resolvedFormSchema: any = null;
+    if (this.documentFormsService) {
+      resolvedFormSchema = await this.documentFormsService
+        .resolveFormByDocumentType(doc.companyId, dto.documentType ?? doc.documentType)
+        .catch(() => null);
+      if (resolvedFormSchema && dto.documentType !== undefined) {
+        updatePayload.documentType = resolvedFormSchema.code;
+      }
+    }
+
     await doc.update(updatePayload);
+
+    if (this.documentFormsService) {
+      const targetDocType =
+        resolvedFormSchema?.code || updatePayload.documentType || doc.documentType || 'documento_general';
+      const mergedFormData = this.documentFormsService.buildFormDataFromExtraction(
+        resolvedFormSchema,
+        updatePayload.extractedData ?? doc.extractedData,
+        dto.documentType ?? doc.documentType,
+        dto.formData ?? doc.formRecord?.formData ?? {},
+      );
+      await this.documentFormsService
+        .upsertFormRecord({
+          companyId: doc.companyId,
+          documentId: doc.id,
+          schema: resolvedFormSchema,
+          documentType: targetDocType,
+          formData: mergedFormData,
+          actorUserId: userId,
+          markValidated: true,
+        })
+        .catch(() => null);
+    }
+
+    const refreshedDoc = await this.findById(doc.id, companyId).catch(() => doc);
 
     await this.auditService.log({
       action: AuditAction.UPDATE,
@@ -498,7 +587,7 @@ export class DocumentsService {
 
     return {
       message: 'Documento validado y confirmado exitosamente',
-      document: doc,
+      document: refreshedDoc,
     };
   }
 
@@ -596,7 +685,11 @@ export class DocumentsService {
       offset,
       attributes: { exclude: ['rawText'] },
       order: [['createdAt', 'DESC']],
-      include: [{ model: Company, attributes: ['id', 'name', 'slug'] }],
+      include: [
+        { model: Company, attributes: ['id', 'name', 'slug'] },
+        { model: Client, attributes: ['id', 'name', 'tradeName', 'taxId', 'taxIdType', 'taxCondition', 'city', 'province'] },
+        { model: DocumentFormRecord, attributes: ['id', 'formSchemaId', 'documentType', 'formData', 'schemaVersion', 'validatedAt'] },
+      ],
     });
 
     return {
@@ -613,7 +706,11 @@ export class DocumentsService {
   async findById(id: number, companyId: number): Promise<Document> {
     const scopedCompanyId = this.assertValidCompanyScope(companyId);
     const doc = await this.documentModel.findByPk(id, {
-      include: [{ model: Company, attributes: ['id', 'name', 'slug'] }],
+      include: [
+        { model: Company, attributes: ['id', 'name', 'slug'] },
+        { model: Client, attributes: ['id', 'name', 'tradeName', 'taxId', 'taxIdType', 'taxCondition', 'email', 'phone', 'city', 'province'] },
+        { model: DocumentFormRecord, attributes: ['id', 'formSchemaId', 'documentType', 'formData', 'schemaVersion', 'validatedAt'] },
+      ],
     });
 
     if (!doc) {
@@ -645,6 +742,7 @@ export class DocumentsService {
     });
 
     this.processingQueue.enqueue(doc.id, actorUserId ?? null);
+    void this.processingQueue.emitCompanyQueueSnapshot?.(companyId);
 
     return {
       message: `Se inició el reprocesamiento con IA de '${doc.originalName}'`,

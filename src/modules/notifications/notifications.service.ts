@@ -294,4 +294,13 @@ export class NotificationsService {
   ): Promise<NotificationPreference[]> {
     return this.preferencesService.updatePreferences(userId, dto);
   }
+
+  emitCompanyEvent(companyId: number, event: string, data: any): void {
+    if (!companyId || companyId <= 0) return;
+    try {
+      this.gateway.emitToCompany(companyId, event, data);
+    } catch (err: any) {
+      this.logger.warn(`No se pudo emitir '${event}' a compañía #${companyId}: ${err?.message}`);
+    }
+  }
 }

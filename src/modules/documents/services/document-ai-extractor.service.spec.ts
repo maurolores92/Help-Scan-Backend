@@ -563,5 +563,116 @@ describe('DocumentAiExtractorService', () => {
     const secondPayload = JSON.parse(fetchMock.mock.calls[1][1].body);
     expect(secondPayload.contents[0].parts[0].inlineData.mimeType).toBe('application/pdf');
   });
+
+  it('debe asignar Razón Social al Receptor (no al Emisor) y parsear $ 154.200 como 154200 en presupuestos con logo gráfico', async () => {
+    delete process.env.GEMINI_API_KEY;
+    mockedPdfParse.mockResolvedValueOnce({
+      numpages: 1,
+      text: `
+        SERVICIO TÉCNICO
+        Mar del Plata 06 de febrero de 2024
+        Razón social: AGUERRE MARIA MERCEDES
+        Contacto: Marcela
+        Teléfono: 249 4476985
+        E-mail: mercedes-aguerre@hotmail.com
+        Equipo: MP 402 SPF   ID: 2971
+        De nuestra mayor consideración:
+        Por medio del presente les hacemos llegar el siguiente presupuesto de reparación:
+         UNI. FOTOCONDUCTORA MP 402 (1)
+         MANO DE OBRA (1)
+        Total: $ 154.200 + IVA
+        Validez de la propuesta: 5 días a partir de la fecha.
+      `,
+    });
+
+    const result = await service.extractFromBuffer(
+      Buffer.from('%PDF-1.4 presupuesto servicio tecnico'),
+      'presupuesto_aguerre.pdf',
+    );
+
+    expect(result.issuerName).toBeNull();
+    expect(result.recipientName).toBe('AGUERRE MARIA MERCEDES');
+    expect(result.totalAmount).toBe(154200);
+  });
+
+  it('debe corregir cuando la IA interpreta $ 154.200 como 154.2 y rescatar el emisor del logo con gemini_vision', async () => {
+    process.env.GEMINI_API_KEY = 'fake-gemini-key';
+    const presupuestoText = `
+      SERVICIO TÉCNICO
+      Mar del Plata 06 de febrero de 2024
+      Razón social: AGUERRE MARIA MERCEDES
+      Total: $ 154.200 + IVA
+      Validez de la propuesta: 5 días a partir de la fecha.
+    `;
+    mockedPdfParse.mockResolvedValueOnce({
+      numpages: 1,
+      text: presupuestoText,
+    });
+
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          usageMetadata: { totalTokenCount: 600 },
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      documentType: 'presupuesto',
+                      summary: 'Presupuesto de servicio técnico para Aguerre Maria Mercedes',
+                      issuerName: null,
+                      recipientName: 'AGUERRE MARIA MERCEDES',
+                      totalAmount: 154.2,
+                      items: [],
+                      aiConfidence: 0.9,
+                    }),
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          usageMetadata: { totalTokenCount: 1200 },
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      documentType: 'presupuesto',
+                      summary: 'Presupuesto emitido por Help Copies S.R.L.',
+                      issuerName: 'Help Copies S.R.L.',
+                      recipientName: 'AGUERRE MARIA MERCEDES',
+                      totalAmount: 154.2,
+                      items: [],
+                      aiConfidence: 0.95,
+                    }),
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      });
+    global.fetch = fetchMock as any;
+
+    const result = await service.extractFromBuffer(
+      Buffer.from('%PDF-1.4 presupuesto help copies logo'),
+      'presupuesto_con_logo.pdf',
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.extractionEngine).toBe('gemini_vision');
+    expect(result.issuerName).toBe('Help Copies S.R.L.');
+    expect(result.recipientName).toBe('AGUERRE MARIA MERCEDES');
+    expect(result.totalAmount).toBe(154200);
+  });
 });
 

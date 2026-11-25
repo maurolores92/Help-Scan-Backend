@@ -31,6 +31,7 @@ export const buildDocumentSearchWhere = (
     department,
     documentLetter,
     recipientTaxId,
+    clientId,
     minAmount,
     maxAmount,
   } = query;
@@ -39,6 +40,10 @@ export const buildDocumentSearchWhere = (
 
   if (status) {
     andConditions.push({ status });
+  }
+
+  if (clientId) {
+    andConditions.push({ clientId });
   }
 
   if (paymentStatus) {

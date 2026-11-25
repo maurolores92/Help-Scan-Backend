@@ -69,6 +69,12 @@ export class QueryDocumentDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  clientId?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
   page?: number = 1;
 
   @IsOptional()

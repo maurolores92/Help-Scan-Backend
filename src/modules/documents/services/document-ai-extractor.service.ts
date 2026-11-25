@@ -17,19 +17,28 @@ INSTRUCCIONES CLAVE DE EXTRACCIÓN Y NORMALIZACIÓN:
    - Identifica el tipo exacto: "factura_a", "factura_b", "factura_c", "remito", "presupuesto", "nota_pedido", "orden_compra", "recibo", "orden_servicio", "contrato", "legajo", "otro".
    - Número de documento: Si tiene punto de venta o sucursal, normaliza a formato de 5 y 8 dígitos ej: "00008-00041980" o el identificador visible.
    - Emisor vs Receptor y Logos (MUY IMPORTANTE):
-     * EMISOR ("issuerName", "issuerTaxId"): es SIEMPRE la empresa/persona que emite el comprobante. Suele estar en el membrete superior (arriba de "ORIGINAL" / letra A/B/C/R / "Señores:"), frecuentemente **dentro de un LOGO gráfico** o en tipografía grande junto a Punto de Venta / Ingresos Brutos / Inicio de Actividades. Si analizas el PDF visualmente y el nombre del emisor figura solo dentro del logotipo de cabecera, léelo directamente del logo y devuélvelo en "issuerName".
-     * RECEPTOR ("recipientName", "recipientTaxId"): es SIEMPRE el cliente a quien va dirigido el comprobante. Aparece en el cuadro medio/inferior bajo rótulos como "Señores:", "Cliente:", "Destinatario:", "Apellido y Nombre / Razón Social:" o junto a "Domicilio:" / "Condición frente al IVA" del comprador. NUNCA pongas al receptor en "issuerName" ni al emisor en "recipientName".
+     * EMISOR ("issuerName", "issuerTaxId"): es SIEMPRE la empresa/persona que emite el comprobante. Suele estar en el membrete superior (arriba de "ORIGINAL" / letra A/B/C/R / "Señores:"), frecuentemente **dentro de un LOGO gráfico** o junto a Punto de Venta / Ingresos Brutos / Inicio de Actividades. Si analizas el PDF visualmente y el nombre del emisor figura solo dentro del logotipo de cabecera, léelo directamente del logo y devuélvelo en "issuerName".
+     * RECEPTOR ("recipientName", "recipientTaxId"): es SIEMPRE el cliente a quien va dirigido el comprobante ("Señores:", "Cliente:", "Destinatario:", "Apellido y Nombre / Razón Social:" o quien recibe la carta/presupuesto).
+     * REGLA CRÍTICA EN PRESUPUESTOS, SERVICIOS TÉCNICOS Y NOTAS: Si aparece un bloque con "Razón social:", "Contacto:", "Teléfono:", "E-mail:" seguido de frases como "De nuestra mayor consideración", "le hacemos llegar el siguiente presupuesto" o detalle de reparación, esa Razón Social es SIEMPRE el RECEPTOR/CLIENTE ("recipientName"), NUNCA el emisor. Si el emisor no aparece en el texto porque probablemente está en un logo gráfico, devuelve "issuerName": null (NO pongas al cliente como emisor).
      * RESPONSABLE ("responsiblePerson"): completar ÚNICAMENTE si figura explícitamente una persona física firmante, vendedor, contacto o quien recibe conforme (ej: "Recibió: Juan Pérez", "Atte: María López"). NO pongas aquí el nombre de la empresa emisora, ni del cliente, ni la ciudad; si no aparece una persona física explícita, usa null.
    - CUITs: Formato XX-XXXXXXXX-X (11 dígitos). Corrige automáticamente errores ópticos comunes de OCR (como letra 'O' por número '0', o barras '/' por guiones '-').
    - CAE: Si figura CAE de AFIP (código de 14 dígitos numéricos), extráelo limpio en "cae".
    - Condición fiscal de IVA: Clasifica estrictamente en una de: "Responsable Inscripto", "Monotributo", "Exento", "Consumidor Final", "No Responsable".
    - Fechas: Normaliza siempre a formato ISO "YYYY-MM-DD".
-   - Montos numéricos: Extrae valores numéricos flotantes limpios (ej: 154200.50), sin símbolos de moneda ni separadores de miles.
-     * "netAmount": subtotal o base imponible neta sin impuestos.
+   - Montos numéricos (FORMATO ARGENTINO/LATAM ESTRICTO):
+     * En Argentina, el punto (.) seguido de exactamente 3 dígitos SIN coma decimal (ej: "$ 154.200", "$ 36.500", "$ 1.250.000", "$ 154.200 + IVA") es SEPARADOR DE MILES: debes devolver 154200, 36500, 1250000 — JAMÁS 154.20 ni 36.50.
+     * Solo hay decimales después de coma (",", ej: "154.200,50" -> 154200.5) o de un punto con 1 o 2 dígitos al final (ej: "47819.20" -> 47819.2).
+     * "netAmount": subtotal o base imponible neta sin impuestos. Si dice "$ 154.200 + IVA" y no discrimina el monto de IVA, "totalAmount" es 154200 (o "netAmount": 154200).
      * "taxAmount": total de IVA u otros tributos.
-     * "totalAmount": importe total final a pagar.
+     * "totalAmount": importe total final visible (ej: 154200).
    - Ítems / Artículos: Extrae cada renglón de producto o servicio con { "code": string|null, "description": string, "quantity": number|null, "unitPrice": number|null, "subtotal": number|null }.
-   - Equipos y Servicios Técnicos: Si el comprobante menciona impresoras, fotocopiadoras o máquinas (ej. HP LaserJet, Ricoh MP), extrae "equipmentId" (ej: "7016"), "equipmentModel" (ej: "HP LaserJet Managed E52645") y "meterCount" (contadores ej: "ACT:8 - ANT:7").
+   - Equipos y Servicios Técnicos: Si el comprobante menciona bienes, vehículos, equipos o activos en reparación/servicio, extrae en "attributes": "tipo_activo", "modelo", "numero_serie", "contador" (si aplica), "falla_reportada" y "trabajo_realizado".
+   - Datos fiscales ARCA / Comprobantes específicos (devolver en "attributes" cuando aparezcan en el documento):
+     * Factura/NC/ND ARCA: "codigo_arca" (ej: 001,006,011,003,201), "subtipo_fiscal" ("Factura" | "Nota de Crédito" | "Nota de Débito" | "Factura de Crédito Electrónica (FCE)" | "Tique / Ticket Factura"), "tipo_autorizacion" ("CAE"|"CAEA"|"CAI"), "concepto_arca" ("Productos"|"Servicios"|"Productos y Servicios"), "periodo_desde", "periodo_hasta", "condicion_iva_emisor", "ingresos_brutos_emisor", "inicio_actividades", "tipo_cambio", "iva_21", "iva_105", "iva_27", "percepcion_iibb", "comprobante_asociado".
+     * Presupuesto: "validez_oferta", "plazo_entrega", "condicion_precios_iva" ("Precios + IVA (Neto)" | "Precios Finales (IVA Incluido)" | "Exento / Sin IVA"), "descuento".
+     * Remito: "cot", "cuit_transporte", "patente", "bultos", "numero_guia", "valor_declarado".
+     * Recibo / Orden de Pago: "clase_recibo" ("Recibo X (Cobranza / Interno)" | "Orden de Pago (Tesorería)" | "Recibo Fiscal ARCA (Letra A/B/C)"), "banco", "comprobantes_imputados", "retenciones".
+     * Contrato / Legajo RRHH: "tipo_contrato", "fecha_inicio", "renovacion_automatica", "dias_preaviso", "indice_ajuste", "subtipo_rrhh", "puesto", "fecha_ingreso", "haberes_brutos", "deducciones", "obra_social".
    - Documentos escaneados, fotos o manuscritos (remitos / facturas manuales):
      * Si recibes la imagen/PDF junto con texto OCR auxiliar, prioriza siempre lo que observas visualmente en la imagen del documento (el OCR puede omitir o deformar texto escrito a mano).
      * Transcribe con cuidado renglones, cantidades, cliente, fecha, importes y persona firmante/receptora aunque estén en letra manuscrita.
@@ -454,20 +463,25 @@ export class DocumentAiExtractorService implements OnModuleInit {
       .replace(/\s+/g, '_')
       .slice(0, 80);
 
-    const parsedTotal =
+    const rawTotal =
       parsed.totalAmount !== null && parsed.totalAmount !== undefined && parsed.totalAmount !== ''
         ? Number(parsed.totalAmount)
         : null;
 
-    const parsedNet =
+    const rawNet =
       parsed.netAmount !== null && parsed.netAmount !== undefined && parsed.netAmount !== ''
         ? Number(parsed.netAmount)
         : null;
 
-    const parsedTax =
+    const rawTax =
       parsed.taxAmount !== null && parsed.taxAmount !== undefined && parsed.taxAmount !== ''
         ? Number(parsed.taxAmount)
         : null;
+
+    const amountCheckText = `${params.nativeText || ''}\n${String(parsed.rawText || '')}`;
+    const parsedTotal = this.fixArgentineThousandsMisread(rawTotal, amountCheckText);
+    const parsedNet = this.fixArgentineThousandsMisread(rawNet, amountCheckText);
+    const parsedTax = this.fixArgentineThousandsMisread(rawTax, amountCheckText);
 
     // Fallback prioritario: resultado base de Python o heurísticas locales
     const fallback =
@@ -498,7 +512,7 @@ export class DocumentAiExtractorService implements OnModuleInit {
           : it.quantity !== null && it.quantity !== undefined && !isNaN(Number(it.quantity))
             ? Number(it.quantity)
             : 1,
-      precioSinIva:
+      precioSinIva: this.fixArgentineThousandsMisread(
         it.precioSinIva !== null && it.precioSinIva !== undefined && !isNaN(Number(it.precioSinIva))
           ? Number(it.precioSinIva)
           : it.precio_sin_iva !== null && it.precio_sin_iva !== undefined && !isNaN(Number(it.precio_sin_iva))
@@ -506,7 +520,9 @@ export class DocumentAiExtractorService implements OnModuleInit {
             : it.unitPrice !== null && it.unitPrice !== undefined && !isNaN(Number(it.unitPrice))
               ? Number(it.unitPrice)
               : null,
-      precioFinal:
+        amountCheckText,
+      ),
+      precioFinal: this.fixArgentineThousandsMisread(
         it.precioFinal !== null && it.precioFinal !== undefined && !isNaN(Number(it.precioFinal))
           ? Number(it.precioFinal)
           : it.precio_final !== null && it.precio_final !== undefined && !isNaN(Number(it.precio_final))
@@ -514,6 +530,8 @@ export class DocumentAiExtractorService implements OnModuleInit {
             : it.subtotal !== null && it.subtotal !== undefined && !isNaN(Number(it.subtotal))
               ? Number(it.subtotal)
               : null,
+        amountCheckText,
+      ),
       ivaPorcentaje:
         it.ivaPorcentaje !== null && it.ivaPorcentaje !== undefined && !isNaN(Number(it.ivaPorcentaje))
           ? Number(it.ivaPorcentaje)
@@ -521,6 +539,21 @@ export class DocumentAiExtractorService implements OnModuleInit {
             ? Number(it.iva_porcentaje)
             : null,
     }));
+
+    const resolvedRecipientName = parsed.recipientName
+      ? String(parsed.recipientName).slice(0, 200)
+      : fallback.recipientName;
+    const safeFallbackIssuer =
+      fallback.issuerName &&
+      resolvedRecipientName &&
+      fallback.issuerName.trim().toLowerCase() === resolvedRecipientName.trim().toLowerCase()
+        ? null
+        : fallback.issuerName;
+    const resolvedIssuerName = parsed.issuerName
+      ? String(parsed.issuerName).slice(0, 200)
+      : params.mode === 'gemini_text' && parsed.issuerName === null
+        ? null
+        : safeFallbackIssuer;
 
     const result: UniversalDocumentExtractionResult = {
       documentType: normalizedType || fallback.documentType,
@@ -534,9 +567,9 @@ export class DocumentAiExtractorService implements OnModuleInit {
         typeof parsed.dueDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsed.dueDate)
           ? parsed.dueDate
           : fallback.dueDate,
-      issuerName: parsed.issuerName ? String(parsed.issuerName).slice(0, 200) : fallback.issuerName,
+      issuerName: resolvedIssuerName,
       issuerTaxId: parsed.issuerTaxId ? String(parsed.issuerTaxId).slice(0, 50) : fallback.issuerTaxId,
-      recipientName: parsed.recipientName ? String(parsed.recipientName).slice(0, 200) : fallback.recipientName,
+      recipientName: resolvedRecipientName,
       recipientTaxId: parsed.recipientTaxId ? String(parsed.recipientTaxId).slice(0, 50) : fallback.recipientTaxId,
       recipientPhone: parsed.recipientPhone ? String(parsed.recipientPhone).slice(0, 50) : fallback.recipientPhone,
       recipientEmail: parsed.recipientEmail ? String(parsed.recipientEmail).slice(0, 100) : fallback.recipientEmail,
@@ -622,6 +655,31 @@ export class DocumentAiExtractorService implements OnModuleInit {
     );
 
     return result;
+  }
+
+  /**
+   * Corrige el caso típico donde la IA interpreta "$ 154.200" como decimal 154.2 en lugar de 154200.
+   */
+  private fixArgentineThousandsMisread(
+    amount: number | null,
+    contextText: string,
+  ): number | null {
+    if (amount === null || !Number.isFinite(amount) || amount <= 0 || amount >= 1000) {
+      return amount;
+    }
+    const scaled = Math.round(amount * 1000);
+    if (Math.abs(scaled - amount * 1000) > 0.001) {
+      return amount;
+    }
+
+    const formattedEs = scaled.toLocaleString('de-DE'); // Ej: 154200 -> "154.200", 36500 -> "36.500"
+    const escapedEs = formattedEs.replace(/\./g, '\\.');
+    const thousandsRegex = new RegExp(`(?:^|[^\\d.,])${escapedEs}(?:,00)?(?![\\d.])`);
+    if (thousandsRegex.test(contextText)) {
+      return scaled;
+    }
+
+    return amount;
   }
 
   private safeParseJsonObject(raw: string): Record<string, any> {
@@ -727,6 +785,8 @@ export class DocumentAiExtractorService implements OnModuleInit {
           ? data.extracted_data.items
           : [];
 
+    const amountCheckText = String(data.rawText || data.raw_text || '');
+
     const items = rawItems.map((it: any, idx: number) => ({
       codigo: it.codigo || it.code || null,
       nombre: it.nombre || it.descripcion || it.description || `Ítem #${idx + 1}`,
@@ -736,7 +796,7 @@ export class DocumentAiExtractorService implements OnModuleInit {
           : it.quantity !== null && it.quantity !== undefined && !isNaN(Number(it.quantity))
             ? Number(it.quantity)
             : 1,
-      precioSinIva:
+      precioSinIva: this.fixArgentineThousandsMisread(
         it.precioSinIva !== null && it.precioSinIva !== undefined && !isNaN(Number(it.precioSinIva))
           ? Number(it.precioSinIva)
           : it.precio_sin_iva !== null && it.precio_sin_iva !== undefined && !isNaN(Number(it.precio_sin_iva))
@@ -744,7 +804,9 @@ export class DocumentAiExtractorService implements OnModuleInit {
             : it.unitPrice !== null && it.unitPrice !== undefined && !isNaN(Number(it.unitPrice))
               ? Number(it.unitPrice)
               : null,
-      precioFinal:
+        amountCheckText,
+      ),
+      precioFinal: this.fixArgentineThousandsMisread(
         it.precioFinal !== null && it.precioFinal !== undefined && !isNaN(Number(it.precioFinal))
           ? Number(it.precioFinal)
           : it.precio_final !== null && it.precio_final !== undefined && !isNaN(Number(it.precio_final))
@@ -752,6 +814,8 @@ export class DocumentAiExtractorService implements OnModuleInit {
             : it.subtotal !== null && it.subtotal !== undefined && !isNaN(Number(it.subtotal))
               ? Number(it.subtotal)
               : null,
+        amountCheckText,
+      ),
       ivaPorcentaje:
         it.ivaPorcentaje !== null && it.ivaPorcentaje !== undefined && !isNaN(Number(it.ivaPorcentaje))
           ? Number(it.ivaPorcentaje)

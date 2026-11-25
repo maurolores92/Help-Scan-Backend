@@ -32,7 +32,10 @@ export class SyncService implements OnModuleInit {
       'Notification',
       'NotificationPreference',
       'PushSubscription',
+      'DocumentTypeForm',
+      'Client',
       'Document',
+      'DocumentFormRecord',
       'CompanyEmailChannel',
       'EmailMessage',
       'CompanyWhatsappChannel',
@@ -66,6 +69,7 @@ export class SyncService implements OnModuleInit {
 
     await this.ensurePlanSchemaColumns();
     await this.ensureDocumentSchemaColumns();
+    await this.ensureClientSchemaColumns();
     await this.ensureWhatsappSchemaColumns();
     await this.ensureIndexes();
 
@@ -175,6 +179,33 @@ export class SyncService implements OnModuleInit {
       `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "due_alert_sent_at" TIMESTAMP WITH TIME ZONE DEFAULT NULL;`,
       `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "duplicate_of_document_id" INTEGER DEFAULT NULL;`,
       `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "validation_warnings" JSONB DEFAULT '[]'::jsonb;`,
+      `ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "client_id" INTEGER DEFAULT NULL;`,
+    ];
+
+    for (const sql of statements) {
+      try {
+        await this.sequelize.query(sql);
+      } catch { }
+    }
+  }
+
+  private async ensureClientSchemaColumns() {
+    const statements = [
+      `ALTER TABLE "clients" ALTER COLUMN "tax_id" DROP NOT NULL;`,
+      `ALTER TABLE "clients" ALTER COLUMN "normalized_tax_id" DROP NOT NULL;`,
+      `ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "trade_name" VARCHAR(200) DEFAULT NULL;`,
+      `ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "tax_id_type" VARCHAR(20) DEFAULT NULL;`,
+      `ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "iibb_number" VARCHAR(40) DEFAULT NULL;`,
+      `ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "iibb_condition" VARCHAR(60) DEFAULT NULL;`,
+      `ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "erp_code" VARCHAR(50) DEFAULT NULL;`,
+      `ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "contact_name" VARCHAR(150) DEFAULT NULL;`,
+      `ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "secondary_phone" VARCHAR(50) DEFAULT NULL;`,
+      `ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "city" VARCHAR(100) DEFAULT NULL;`,
+      `ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "province" VARCHAR(100) DEFAULT NULL;`,
+      `ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "postal_code" VARCHAR(20) DEFAULT NULL;`,
+      `ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "country" VARCHAR(80) DEFAULT NULL;`,
+      `ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "payment_terms" VARCHAR(150) DEFAULT NULL;`,
+      `ALTER TABLE "clients" ADD COLUMN IF NOT EXISTS "cbu" VARCHAR(40) DEFAULT NULL;`,
     ];
 
     for (const sql of statements) {
@@ -235,6 +266,9 @@ export class SyncService implements OnModuleInit {
       { table: 'documents', name: 'idx_documents_due_date', column: 'due_date' },
       { table: 'documents', name: 'idx_documents_payment_status', column: 'payment_status' },
       { table: 'documents', name: 'idx_documents_issuer_tax_id', column: 'issuer_tax_id' },
+      { table: 'documents', name: 'idx_documents_client_id', column: 'client_id' },
+      { table: 'clients', name: 'idx_clients_company_id', column: 'company_id' },
+      { table: 'clients', name: 'idx_clients_erp_code', column: 'erp_code' },
       { table: 'ftp_devices', name: 'idx_ftp_devices_company_id', column: 'company_id' },
       { table: 'ftp_devices', name: 'idx_ftp_devices_status', column: 'status' },
       { table: 'company_email_channels', name: 'idx_email_channels_company_id', column: 'company_id' },
@@ -262,6 +296,12 @@ export class SyncService implements OnModuleInit {
     }
 
     const advancedDocumentIndexes = [
+      `DROP INDEX IF EXISTS "idx_clients_company_normalized_tax_id";`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS "idx_clients_company_normalized_tax_id" ON "clients" ("company_id", "normalized_tax_id") WHERE "normalized_tax_id" IS NOT NULL;`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS "idx_doc_type_forms_global_code" ON "document_type_forms" ("code") WHERE "company_id" IS NULL;`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS "idx_doc_type_forms_company_code" ON "document_type_forms" ("company_id", "code") WHERE "company_id" IS NOT NULL;`,
+      `CREATE INDEX IF NOT EXISTS "idx_doc_form_records_company_type" ON "document_form_records" ("company_id", "document_type");`,
+      `CREATE INDEX IF NOT EXISTS "idx_doc_form_records_data_gin" ON "document_form_records" USING GIN ("form_data");`,
       `CREATE INDEX IF NOT EXISTS "idx_documents_company_type" ON "documents" ("company_id", "document_type");`,
       `CREATE INDEX IF NOT EXISTS "idx_documents_company_date" ON "documents" ("company_id", "document_date");`,
       `CREATE INDEX IF NOT EXISTS "idx_documents_extracted_data_gin" ON "documents" USING GIN ("extracted_data");`,

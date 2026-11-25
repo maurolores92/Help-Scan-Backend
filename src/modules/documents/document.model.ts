@@ -4,12 +4,15 @@ import {
   Column,
   DataType,
   ForeignKey,
+  HasOne,
   Model,
   PrimaryKey,
   Table,
 } from 'sequelize-typescript';
 import { Company } from '../companies/company.model';
+import { Client } from '../clients/client.model';
 import { Users } from '../users/users.model';
+import { DocumentFormRecord } from './models/document-form-record.model';
 
 export enum DocumentSource {
   APP_UPLOAD = 'APP_UPLOAD',
@@ -549,6 +552,20 @@ export class Document extends Model {
     field: 'duplicate_of_document_id',
   })
   declare duplicateOfDocumentId: number | null;
+
+  @ForeignKey(() => Client)
+  @Column({
+    type: DataType.INTEGER,
+    allowNull: true,
+    field: 'client_id',
+  })
+  declare clientId: number | null;
+
+  @BelongsTo(() => Client, { foreignKey: 'clientId', constraints: false })
+  declare client: Client | null;
+
+  @HasOne(() => DocumentFormRecord, { foreignKey: 'documentId', onDelete: 'CASCADE' })
+  declare formRecord: DocumentFormRecord | null;
 
   @Column({
     type: DataType.JSONB,

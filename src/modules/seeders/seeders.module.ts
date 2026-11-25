@@ -8,6 +8,7 @@ import { Company } from '../companies/company.model';
 import { Plan } from '../plans/plan.model';
 import { PlanExchangeConfig } from '../plans/models/plan-exchange-config.model';
 import { Permission } from '../permissions/permission.model';
+import { DocumentTypeForm } from '../documents/models/document-type-form.model';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { Permission } from '../permissions/permission.model';
       Plan,
       PlanExchangeConfig,
       Permission,
+      DocumentTypeForm,
     ]),
   ],
   providers: [SeedService],

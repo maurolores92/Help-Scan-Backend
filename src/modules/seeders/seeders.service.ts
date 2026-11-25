@@ -7,6 +7,8 @@ import { Company, CompanyStatus } from '../companies/company.model';
 import { Plan } from '../plans/plan.model';
 import { PlanExchangeConfig } from '../plans/models/plan-exchange-config.model';
 import { Permission } from '../permissions/permission.model';
+import { DocumentTypeForm } from '../documents/models/document-type-form.model';
+import { DEFAULT_DOCUMENT_FORMS_SEED } from '../documents/data/default-document-forms.data';
 import { RolePermission } from '../permissions/role-permission/role-permission.model';
 import { UserPermission } from '../permissions/user-permission/user-permission.model';
 import {
@@ -301,12 +303,51 @@ export class SeedService {
     return { success: true, message: 'Usuarios base creados exitosamente' };
   }
 
+  async seedDocumentTypeForms(): Promise<void> {
+    try {
+      for (const def of DEFAULT_DOCUMENT_FORMS_SEED) {
+        const existing = await DocumentTypeForm.findOne({
+          where: { companyId: null, code: def.code },
+        });
+        if (!existing) {
+          await DocumentTypeForm.create({
+            companyId: null,
+            code: def.code,
+            label: def.label,
+            description: def.description,
+            icon: def.icon,
+            matchAliases: def.matchAliases,
+            sectionsSchema: def.sectionsSchema,
+            aiExtractionGuide: def.aiExtractionGuide,
+            displayOrder: def.displayOrder,
+            version: def.version,
+            isActive: true,
+          } as any);
+        } else if ((existing.version ?? 0) < def.version) {
+          await existing.update({
+            label: def.label,
+            description: def.description,
+            icon: def.icon,
+            matchAliases: def.matchAliases,
+            sectionsSchema: def.sectionsSchema,
+            aiExtractionGuide: def.aiExtractionGuide,
+            displayOrder: def.displayOrder,
+            version: def.version,
+          });
+        }
+      }
+    } catch (err: any) {
+      this.logger.warn(`[SeedService] Error sembrando formularios por tipo: ${err?.message}`);
+    }
+  }
+
   async seedAll() {
     await this.ensurePlanExchangeConfig();
     const { enterprisePlan } = await this.ensureDefaultPlans();
     await this.ensureDefaultCompany(enterprisePlan?.id);
     await this.ensureSystemRoles();
     await this.seedPermissions();
+    await this.seedDocumentTypeForms();
     await this.ensureSuperAdminUser();
 
     return {

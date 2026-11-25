@@ -1,10 +1,12 @@
-import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationBootstrap, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { Op } from 'sequelize';
 import { Document, DocumentPaymentStatus, DocumentStatus } from '../document.model';
 import { DocumentAiExtractorService } from './document-ai-extractor.service';
 import { DocumentFiscalChecksService } from './document-fiscal-checks.service';
+import { DocumentFormsService } from './document-forms.service';
 import { resolveDefaultPaymentStatus } from '../helpers/document-fiscal-checks.helper';
+import { ClientsService } from '../../clients/clients.service';
 import { TenantQuotasService } from '../../plans/services/tenant-quotas.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { AuditService } from '../../audit/audit.service';
@@ -18,6 +20,20 @@ interface QueuedDocumentJob {
 
 // Extracción y análisis OCR/IA estrictamente de 1 en 1 para proteger CPU y RAM
 const MAX_CONCURRENT_EXTRACTIONS = 1;
+
+export interface CompanyProcessingQueueSnapshot {
+  isProcessing: boolean;
+  pendingCount: number;
+  processingCount: number;
+  totalInQueue: number;
+  items: Array<{
+    id: number;
+    originalName: string;
+    status: DocumentStatus;
+    source: string;
+    createdAt: Date;
+  }>;
+}
 
 export type DocumentPostProcessHook = (doc: Document) => Promise<void> | void;
 
@@ -45,6 +61,8 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
     private readonly tenantQuotasService: TenantQuotasService,
     private readonly notificationsService: NotificationsService,
     private readonly auditService: AuditService,
+    @Optional() private readonly clientsService?: ClientsService,
+    @Optional() private readonly documentFormsService?: DocumentFormsService,
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
@@ -73,6 +91,66 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
     this.enqueuedIds.add(documentId);
     this.queue.push({ documentId, actorUserId });
     setImmediate(() => this.drainQueue());
+  }
+
+  async getCompanyQueueSnapshot(
+    companyId: number,
+  ): Promise<CompanyProcessingQueueSnapshot> {
+    const activeDocs = await this.documentModel.findAll({
+      where: {
+        companyId,
+        status: { [Op.in]: [DocumentStatus.PENDING, DocumentStatus.PROCESSING] },
+      },
+      attributes: ['id', 'originalName', 'status', 'source', 'createdAt'],
+      order: [['createdAt', 'ASC']],
+      limit: 50,
+    });
+
+    let pendingCount = 0;
+    let processingCount = 0;
+    for (const d of activeDocs) {
+      if (d.status === DocumentStatus.PROCESSING) processingCount++;
+      else pendingCount++;
+    }
+
+    const sortedItems = [...activeDocs]
+      .sort((a, b) => {
+        if (a.status === b.status) return 0;
+        return a.status === DocumentStatus.PROCESSING ? -1 : 1;
+      })
+      .slice(0, 10)
+      .map((d) => ({
+        id: d.id,
+        originalName: d.originalName,
+        status: d.status,
+        source: d.source,
+        createdAt: d.createdAt,
+      }));
+
+    const totalInQueue = pendingCount + processingCount;
+    return {
+      isProcessing: totalInQueue > 0,
+      pendingCount,
+      processingCount,
+      totalInQueue,
+      items: sortedItems,
+    };
+  }
+
+  async emitCompanyQueueSnapshot(companyId: number): Promise<void> {
+    if (!companyId || companyId <= 0 || process.env.NODE_ENV === 'test') return;
+    try {
+      const snapshot = await this.getCompanyQueueSnapshot(companyId);
+      (this.notificationsService as any).emitCompanyEvent?.(
+        companyId,
+        'documents:queue-status',
+        snapshot,
+      );
+    } catch (err: any) {
+      this.logger.warn(
+        `No se pudo emitir estado de cola para compañía #${companyId}: ${err?.message}`,
+      );
+    }
   }
 
   private drainQueue(): void {
@@ -107,6 +185,7 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
       status: DocumentStatus.PROCESSING,
       errorMessage: null,
     });
+    void this.emitCompanyQueueSnapshot(doc.companyId);
 
     try {
       const fullPath = resolveSafeStorageFilePath(
@@ -150,20 +229,56 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
           ? doc.paymentStatus
           : (resolveDefaultPaymentStatus(extraction.documentType) as DocumentPaymentStatus);
 
+      const matchedClient = this.clientsService
+        ? await this.clientsService
+            .resolveOrCreateClientForDocument(doc.companyId, {
+              recipientName: extraction.recipientName,
+              recipientTaxId: extraction.recipientTaxId,
+              recipientEmail: extraction.recipientEmail,
+              recipientPhone: extraction.recipientPhone,
+              deliveryAddress: extraction.deliveryAddress,
+              responsiblePerson: extraction.responsiblePerson,
+              taxCondition: extraction.taxCondition,
+              paymentTerms: extraction.paymentTerms,
+              issuerTaxId: extraction.issuerTaxId,
+              rawText: extraction.rawText,
+              extractedData: extraction.extractedData,
+              sourceDocumentName: doc.originalName,
+              actorUserId: actorUserId ?? doc.userId ?? null,
+            })
+            .catch(() => null)
+        : null;
+
+      const resolvedForm = this.documentFormsService
+        ? await this.documentFormsService
+            .resolveFormByDocumentType(doc.companyId, extraction.documentType)
+            .catch(() => null)
+        : null;
+      const canonicalDocumentType = resolvedForm?.code || extraction.documentType;
+      const typeHints = this.documentFormsService
+        ? this.documentFormsService.inferCoreAndCustomHintsFromRawType(
+            extraction.documentType,
+            canonicalDocumentType,
+            extraction.documentLetter,
+          )
+        : { documentLetter: extraction.documentLetter || undefined, customDefaults: {} };
+      const effectiveLetter = typeHints.documentLetter ?? extraction.documentLetter ?? null;
+
       await doc.update({
         status: nextStatus,
         paymentStatus: defaultPaymentStatus,
+        clientId: matchedClient?.id ?? doc.clientId ?? null,
         duplicateOfDocumentId: fiscalEval.duplicateOfDocumentId,
         validationWarnings: fiscalEval.validationWarnings,
-        documentType: extraction.documentType,
+        documentType: canonicalDocumentType,
         summary: extraction.summary,
         documentNumber: extraction.documentNumber,
         documentDate: extraction.documentDate,
         dueDate: extraction.dueDate,
         issuerName: extraction.issuerName,
         issuerTaxId: extraction.issuerTaxId,
-        recipientName: extraction.recipientName,
-        recipientTaxId: extraction.recipientTaxId,
+        recipientName: extraction.recipientName || matchedClient?.name || null,
+        recipientTaxId: extraction.recipientTaxId || matchedClient?.taxId || null,
         recipientPhone: extraction.recipientPhone,
         recipientEmail: extraction.recipientEmail,
         deliveryAddress: extraction.deliveryAddress,
@@ -177,7 +292,7 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
         referenceNumber: extraction.referenceNumber,
         cae: extraction.cae,
         taxCondition: extraction.taxCondition,
-        documentLetter: extraction.documentLetter,
+        documentLetter: effectiveLetter,
         pointOfSale: extraction.pointOfSale,
         caeDueDate: extraction.caeDueDate,
         purchaseOrderNumber: extraction.purchaseOrderNumber,
@@ -197,6 +312,25 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
         processedAt: new Date(),
         errorMessage: null,
       });
+
+      if (this.documentFormsService) {
+        const extractedFormData = this.documentFormsService.buildFormDataFromExtraction(
+          resolvedForm,
+          extraction.extractedData,
+          extraction.documentType,
+        );
+        await this.documentFormsService
+          .upsertFormRecord({
+            companyId: doc.companyId,
+            documentId: doc.id,
+            schema: resolvedForm,
+            documentType: canonicalDocumentType,
+            formData: extractedFormData,
+            actorUserId: actorUserId ?? doc.userId ?? null,
+            markValidated: false,
+          })
+          .catch(() => null);
+      }
 
       console.log(
         `\x1b[92m\x1b[1m✔ [GUARDADO EXITOSO] Documento #${doc.id} ('${doc.originalName}') actualizado en base de datos (Estado: ${nextStatus})\x1b[0m`
@@ -243,6 +377,7 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
           link: '/documents',
         },
       });
+      void this.emitCompanyQueueSnapshot(doc.companyId);
 
       for (const hook of this.postProcessHooks) {
         try {
@@ -263,6 +398,7 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
         status: DocumentStatus.ERROR,
         errorMessage: errMsg,
       });
+      void this.emitCompanyQueueSnapshot(doc.companyId);
 
       await this.notificationsService.dispatch({
         type: 'document.error',

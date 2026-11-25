@@ -1,0 +1,136 @@
+import { DocumentFormsService } from './document-forms.service';
+import { DEFAULT_DOCUMENT_FORMS_SEED } from '../data/default-document-forms.data';
+
+describe('DocumentFormsService', () => {
+  const buildMockForms = () =>
+    DEFAULT_DOCUMENT_FORMS_SEED.map((def, idx) => ({
+      id: idx + 1,
+      companyId: null,
+      code: def.code,
+      label: def.label,
+      description: def.description,
+      icon: def.icon,
+      matchAliases: def.matchAliases,
+      sectionsSchema: def.sectionsSchema,
+      aiExtractionGuide: def.aiExtractionGuide,
+      displayOrder: def.displayOrder,
+      version: def.version,
+      isActive: true,
+    }));
+
+  const buildService = () => {
+    const mockForms = buildMockForms();
+    const formModel: any = {
+      count: jest.fn().mockResolvedValue(mockForms.length),
+      findAll: jest.fn().mockResolvedValue(mockForms),
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockImplementation((payload) => Promise.resolve({ id: 99, ...payload })),
+    };
+    const recordModel: any = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockImplementation((payload) => Promise.resolve({ id: 500, ...payload })),
+    };
+
+    const service = new DocumentFormsService(formModel, recordModel);
+    return { service, formModel, recordModel, mockForms };
+  };
+
+  it('resuelve variantes ARCA hacia el esquema unificado de factura e infiere letra/subtipo', async () => {
+    const { service } = buildService();
+
+    const schemaNc = await service.resolveFormByDocumentType(1, 'nota_credito');
+    expect(schemaNc?.code).toBe('factura');
+
+    const schemaFa = await service.resolveFormByDocumentType(1, 'factura_a');
+    expect(schemaFa?.code).toBe('factura');
+
+    const hintsNc = service.inferCoreAndCustomHintsFromRawType('nota_credito_a', 'factura', null);
+    expect(hintsNc.documentLetter).toBe('A');
+    expect(hintsNc.customDefaults.fiscalSubtype).toBe('Nota de Crédito');
+  });
+
+  it('mapea atributos ARCA extraídos hacia formData del esquema correspondiente', async () => {
+    const { service } = buildService();
+    const facturaSchema = await service.resolveFormByDocumentType(1, 'factura_b');
+
+    const formData = service.buildFormDataFromExtraction(
+      facturaSchema,
+      {
+        attributes: {
+          ingresos_brutos_emisor: '901-555444-3',
+          inicio_actividades: '01/05/2018',
+          condicion_iva_emisor: 'Responsable Inscripto',
+          concepto_arca: 'Servicios',
+          codigo_arca: '006',
+          tipo_cambio: '1050.50',
+        },
+      },
+      'factura_b',
+    );
+
+    expect(formData.fiscalSubtype).toBe('Factura');
+    expect(formData.issuerIibb).toBe('901-555444-3');
+    expect(formData.issuerActivityStartDate).toBe('01/05/2018');
+    expect(formData.issuerTaxCondition).toBe('Responsable Inscripto');
+    expect(formData.concept).toBe('Servicios');
+    expect(formData.afipVoucherCode).toBe('006');
+    expect(formData.exchangeRate).toBe(1050.5);
+  });
+
+  it('resuelve orden_servicio general y mapea campos de activo/falla/trabajo', async () => {
+    const { service } = buildService();
+    const osSchema = await service.resolveFormByDocumentType(2, 'servicio_tecnico');
+    expect(osSchema?.code).toBe('orden_servicio');
+
+    const formData = service.buildFormDataFromExtraction(osSchema, {
+      attributes: {
+        tipo_activo: 'Equipamiento Oficina',
+        modelo: 'MP 402 SPF',
+        numero_serie: 'SN-2971',
+        falla_reportada: 'Error en fusor',
+        trabajo_realizado: 'Cambio de unidad fotoconductora y calibración',
+      },
+    });
+
+    expect(formData.assetType).toBe('Equipamiento Oficina');
+    expect(formData.assetModel).toBe('MP 402 SPF');
+    expect(formData.assetIdentifier).toBe('SN-2971');
+    expect(formData.reportedIssue).toBe('Error en fusor');
+    expect(formData.workPerformed).toBe('Cambio de unidad fotoconductora y calibración');
+  });
+
+  it('persiste y actualiza form_data en document_form_records respetando companyId', async () => {
+    const { service, recordModel } = buildService();
+    const remitoSchema = await service.resolveFormByDocumentType(4, 'remito');
+
+    await service.upsertFormRecord({
+      companyId: 4,
+      documentId: 77,
+      schema: remitoSchema,
+      documentType: 'remito',
+      formData: {
+        cotCode: 'COT-8899',
+        packagesCount: 5,
+        vehiclePlate: 'AB123CD',
+        emptyField: '',
+      },
+      actorUserId: 12,
+      markValidated: true,
+    });
+
+    expect(recordModel.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companyId: 4,
+        documentId: 77,
+        formSchemaId: remitoSchema?.id,
+        documentType: 'remito',
+        validatedByUserId: 12,
+        formData: {
+          cotCode: 'COT-8899',
+          packagesCount: 5,
+          vehiclePlate: 'AB123CD',
+        },
+      }),
+    );
+  });
+});
