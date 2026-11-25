@@ -122,6 +122,13 @@ export class ChannelsController {
     return this.whatsappChannelService.getStatusAndConfig(user);
   }
 
+  @Get('whatsapp/groups')
+  @RequireTenantModule('whatsapp')
+  @RequirePermission('VIEW_CHANNELS')
+  async listWhatsappGroups(@GetUser() user: any) {
+    return this.whatsappChannelService.listGroups(user);
+  }
+
   @Post('whatsapp/connect')
   @RequireTenantModule('whatsapp')
   @RequirePermission('MANAGE_CHANNELS')

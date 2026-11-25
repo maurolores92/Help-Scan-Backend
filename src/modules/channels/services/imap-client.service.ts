@@ -151,15 +151,22 @@ export class ImapClientService {
 
   /**
    * Lee los últimos `maxBatch` correos no leídos de la carpeta configurada.
+   * Cuando se indica `shouldProcessSender`, los correos de remitentes no autorizados
+   * se omiten sin descargarse ni marcarse como leídos en la casilla.
    */
   async fetchUnreadEmails(
     params: ImapConnectionParams,
-    options?: { maxBatch?: number; markAsRead?: boolean },
+    options?: {
+      maxBatch?: number;
+      markAsRead?: boolean;
+      shouldProcessSender?: (senderEmail: string) => boolean;
+    },
   ): Promise<FetchedEmailItem[]> {
     const client = this.createClient(params);
     const folder = (params.folder || 'INBOX').trim() || 'INBOX';
     const maxBatch = options?.maxBatch ?? 15;
     const markAsRead = options?.markAsRead ?? true;
+    const shouldProcessSender = options?.shouldProcessSender;
     const fetched: FetchedEmailItem[] = [];
 
     try {
@@ -175,8 +182,36 @@ export class ImapClientService {
           return [];
         }
 
+        let targetUids = validUids.slice(-maxBatch);
+
+        if (shouldProcessSender) {
+          const envelopeWindowUids = validUids.slice(-Math.max(maxBatch * 5, 100));
+          const envelopes = await client.fetchAll(
+            envelopeWindowUids,
+            { uid: true, envelope: true },
+            { uid: true },
+          );
+          const candidateUids: number[] = [];
+
+          for (const envMsg of envelopes) {
+            if (!Number.isInteger(envMsg.uid) || envMsg.uid <= 0) continue;
+            const rawAddress = envMsg.envelope?.from?.[0]?.address;
+            if (!rawAddress) {
+              candidateUids.push(envMsg.uid);
+              continue;
+            }
+            if (shouldProcessSender(rawAddress.toLowerCase().trim())) {
+              candidateUids.push(envMsg.uid);
+            }
+          }
+
+          if (candidateUids.length === 0) {
+            return [];
+          }
+          targetUids = candidateUids.slice(-maxBatch);
+        }
+
         // Procesar los más recientes primero en lotes acotados para evitar timeouts
-        const targetUids = validUids.slice(-maxBatch);
         const rawMessages = await client.fetchAll(
           targetUids,
           { uid: true, source: true },
@@ -192,6 +227,9 @@ export class ImapClientService {
             const parsed: ParsedMail = await simpleParser(message.source);
             const fromFirst = parsed.from?.value?.[0];
             const senderEmail = (fromFirst?.address || 'desconocido@correo.local').toLowerCase().trim();
+            if (shouldProcessSender && !shouldProcessSender(senderEmail)) {
+              continue;
+            }
             const senderName = fromFirst?.name?.trim() || null;
 
             const messageId =

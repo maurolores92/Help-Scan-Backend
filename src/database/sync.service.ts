@@ -72,6 +72,7 @@ export class SyncService implements OnModuleInit {
     await this.ensureDocumentSchemaColumns();
     await this.ensureClientSchemaColumns();
     await this.ensureWhatsappSchemaColumns();
+    await this.ensureEmailSchemaColumns();
     await this.ensureIndexes();
 
     try {
@@ -232,10 +233,27 @@ export class SyncService implements OnModuleInit {
       `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "connected_phone" VARCHAR(40) DEFAULT NULL;`,
       `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "connected_name" VARCHAR(150) DEFAULT NULL;`,
       `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "ignore_groups" BOOLEAN NOT NULL DEFAULT TRUE;`,
+      `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "group_policy" VARCHAR(20) NOT NULL DEFAULT 'IGNORE';`,
+      `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "allowed_groups" JSONB NOT NULL DEFAULT '[]';`,
       `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "last_qr_at" TIMESTAMP WITH TIME ZONE DEFAULT NULL;`,
       `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "last_message_at" TIMESTAMP WITH TIME ZONE DEFAULT NULL;`,
       `ALTER TABLE "whatsapp_messages" ADD COLUMN IF NOT EXISTS "reply_jid" VARCHAR(120) DEFAULT NULL;`,
+      `ALTER TABLE "whatsapp_messages" ADD COLUMN IF NOT EXISTS "group_jid" VARCHAR(120) DEFAULT NULL;`,
+      `ALTER TABLE "whatsapp_messages" ADD COLUMN IF NOT EXISTS "group_name" VARCHAR(200) DEFAULT NULL;`,
       `ALTER TABLE "company_email_channels" ADD COLUMN IF NOT EXISTS "webhook_secret" VARCHAR(120) DEFAULT NULL;`,
+    ];
+
+    for (const sql of statements) {
+      try {
+        await this.sequelize.query(sql);
+      } catch { }
+    }
+  }
+
+  private async ensureEmailSchemaColumns() {
+    const statements = [
+      `ALTER TABLE "company_email_channels" ADD COLUMN IF NOT EXISTS "sender_policy" VARCHAR(20) NOT NULL DEFAULT 'ALL';`,
+      `ALTER TABLE "company_email_channels" ADD COLUMN IF NOT EXISTS "allowed_senders" JSONB NOT NULL DEFAULT '[]';`,
     ];
 
     for (const sql of statements) {

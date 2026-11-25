@@ -13,6 +13,7 @@ import { Op } from 'sequelize';
 import {
   CompanyEmailChannel,
   EmailProviderType,
+  EmailSenderPolicy,
   EmailSyncStatus,
 } from '../models/company-email-channel.model';
 import { EmailMessage, EmailMessageStatus } from '../models/email-message.model';
@@ -38,6 +39,11 @@ import {
   synthesizeEmailBodyToPdf,
 } from '../helpers/email-pdf-synthesizer.helper';
 import { normalizeInboundEmailWebhookPayload } from '../helpers/inbound-email-webhook.helper';
+import {
+  isEmailSenderAuthorized,
+  normalizeAllowedEmailSenders,
+  normalizeEmailSenderRule,
+} from '../helpers/email-sender-policy.helper';
 
 @Injectable()
 export class ChannelsService {
@@ -99,6 +105,8 @@ export class ChannelsService {
     delete plain.encryptedPassword;
     return {
       ...plain,
+      senderPolicy: plain.senderPolicy || EmailSenderPolicy.ALL,
+      allowedSenders: Array.isArray(plain.allowedSenders) ? plain.allowedSenders : [],
       hasPassword,
     };
   }
@@ -133,6 +141,34 @@ export class ChannelsService {
     }
 
     const webhookSecret = existing?.webhookSecret || this.generateWebhookSecret();
+    const senderPolicy =
+      dto.senderPolicy || existing?.senderPolicy || EmailSenderPolicy.ALL;
+
+    let allowedSenders: string[] = Array.isArray(existing?.allowedSenders)
+      ? existing.allowedSenders
+      : [];
+
+    if (dto.allowedSenders !== undefined) {
+      for (const rawEntry of dto.allowedSenders) {
+        const trimmed = String(rawEntry || '').trim();
+        if (!trimmed) continue;
+        if (!normalizeEmailSenderRule(trimmed)) {
+          throw new BadRequestException(
+            `El remitente o dominio '${trimmed}' no es válido. Usá un correo exacto (ej: facturas@empresa.com) o un dominio (ej: @empresa.com).`,
+          );
+        }
+      }
+      allowedSenders = normalizeAllowedEmailSenders(dto.allowedSenders);
+    }
+
+    if (
+      senderPolicy === EmailSenderPolicy.WHITELIST &&
+      allowedSenders.length === 0
+    ) {
+      throw new BadRequestException(
+        'Agregá al menos un correo o dominio autorizado para activar la lista blanca.',
+      );
+    }
 
     const payload = {
       companyId,
@@ -150,6 +186,8 @@ export class ChannelsService {
           : true,
       markAsRead: dto.markAsRead !== undefined ? dto.markAsRead : true,
       syncIntervalMinutes: dto.syncIntervalMinutes || 5,
+      senderPolicy,
+      allowedSenders,
       webhookSecret,
     };
 
@@ -175,6 +213,8 @@ export class ChannelsService {
         port: saved.port,
         emailUser: saved.emailUser,
         isActive: saved.isActive,
+        senderPolicy: saved.senderPolicy,
+        allowedSendersCount: saved.allowedSenders?.length || 0,
       },
       description: `${existing ? 'Actualizó' : 'Configuró'} el canal de correo IMAP/Webhook (${saved.emailUser})`,
     });
@@ -265,12 +305,30 @@ export class ChannelsService {
     originLabel: 'IMAP' | 'WEBHOOK' = 'IMAP',
   ): Promise<{
     alreadyStored: boolean;
+    ignoredUnauthorized?: boolean;
     createdDocuments: number;
     synthesized: number;
     skipped: number;
     errors: number;
     emailRecordId?: number;
   }> {
+    if (
+      !isEmailSenderAuthorized(
+        item.senderEmail,
+        channel.senderPolicy,
+        channel.allowedSenders,
+      )
+    ) {
+      return {
+        alreadyStored: false,
+        ignoredUnauthorized: true,
+        createdDocuments: 0,
+        synthesized: 0,
+        skipped: 0,
+        errors: 0,
+      };
+    }
+
     const alreadyStored = await this.emailMessageModel.findOne({
       where: { companyId, messageId: item.messageId },
       attributes: ['id'],
@@ -543,14 +601,17 @@ export class ChannelsService {
     await channel.update({
       lastSyncAt: new Date(),
       lastSyncStatus: outcome.errors > 0 ? EmailSyncStatus.ERROR : EmailSyncStatus.OK,
-      lastSyncMessage: outcome.alreadyStored
-        ? 'Webhook duplicado ignorado (correo ya procesado).'
-        : `Webhook recibido: '${normalizedItem.subject}' de ${normalizedItem.senderEmail}.`,
+      lastSyncMessage: outcome.ignoredUnauthorized
+        ? `Webhook ignorado (remitente ${normalizedItem.senderEmail} no autorizado).`
+        : outcome.alreadyStored
+          ? 'Webhook duplicado ignorado (correo ya procesado).'
+          : `Webhook recibido: '${normalizedItem.subject}' de ${normalizedItem.senderEmail}.`,
     });
 
     return {
       ok: true,
       duplicate: outcome.alreadyStored,
+      ignoredUnauthorized: Boolean(outcome.ignoredUnauthorized),
       emailMessageId: outcome.emailRecordId ?? null,
       createdDocuments: outcome.createdDocuments,
       synthesizedCount: outcome.synthesized,
@@ -582,6 +643,16 @@ export class ChannelsService {
 
     try {
       const plainPassword = decryptFtpSecret(channel.encryptedPassword);
+      const shouldProcessSender =
+        channel.senderPolicy === EmailSenderPolicy.WHITELIST
+          ? (senderEmail: string) =>
+              isEmailSenderAuthorized(
+                senderEmail,
+                channel.senderPolicy,
+                channel.allowedSenders,
+              )
+          : undefined;
+
       const unreadEmails = await this.imapClient.fetchUnreadEmails(
         {
           host: channel.host,
@@ -591,7 +662,11 @@ export class ChannelsService {
           password: plainPassword,
           folder: channel.folder,
         },
-        { maxBatch: 20, markAsRead: channel.markAsRead },
+        {
+          maxBatch: 20,
+          markAsRead: channel.markAsRead,
+          shouldProcessSender,
+        },
       );
 
       for (const item of unreadEmails) {
@@ -602,7 +677,7 @@ export class ChannelsService {
           actorUserId,
           'IMAP',
         );
-        if (outcome.alreadyStored) continue;
+        if (outcome.alreadyStored || outcome.ignoredUnauthorized) continue;
         processedEmails++;
         createdDocuments += outcome.createdDocuments;
         synthesizedCount += outcome.synthesized;
@@ -612,7 +687,9 @@ export class ChannelsService {
 
       const summaryMsg =
         processedEmails === 0
-          ? 'Buzón revisado: no se encontraron correos nuevos sin leer.'
+          ? channel.senderPolicy === EmailSenderPolicy.WHITELIST
+            ? 'Buzón revisado: no se encontraron correos nuevos de remitentes autorizados.'
+            : 'Buzón revisado: no se encontraron correos nuevos sin leer.'
           : `Sincronización completada: ${processedEmails} revisado(s), ${createdDocuments} PDF(s) creado(s), ${skippedCount} omitido(s).`;
 
       await channel.update({

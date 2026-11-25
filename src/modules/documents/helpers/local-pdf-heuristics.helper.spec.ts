@@ -43,5 +43,26 @@ describe('local-pdf-heuristics.helper', () => {
         subtipo_fiscal: 'Nota de Crédito',
       }),
     ).toBe('nota_credito');
+
+    expect(
+      refineArcaDocumentType('transferencia_pago', 'Help Copies A Codigo 01 COMPROBANTE FACTURA', {
+        codigo_arca: '001',
+      }),
+    ).toBe('factura');
+  });
+
+  it('clasifica como factura aunque el pie mencione transferencia bancaria y columna REMITO', () => {
+    const sample = [
+      'Help Copies S.R.L. - A - Codigo 01 - Nro. 00008-00041950',
+      'COMPROBANTE FACTURA - FECHA 01/10/2026',
+      'Señores: GIOLA HNOS MDQ S.A. - CUIT: 30-71719467-1',
+      'CONDICIONES DE VENTA | FECHA VTO. | REMITO | N° CUENTA',
+      'CTA. CTE. 15 DIAS F.F.',
+      'Pagará por transferencia bancaria a CBU 0720000000000000000000',
+      'CAE N°: 74481234567890',
+    ].join('\n');
+
+    const res = extractUniversalHeuristicsFromText(sample, 'FAC_A0000800041950.pdf', 1);
+    expect(res.documentType).toBe('factura');
   });
 });

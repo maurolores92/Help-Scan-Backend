@@ -705,8 +705,12 @@ export class DocumentsService {
       ],
     });
 
+    const enrichedRows = this.documentLinksService
+      ? await this.documentLinksService.enrichDocumentsWithBalances(scopedCompanyId, rows)
+      : rows;
+
     return {
-      data: rows,
+      data: enrichedRows,
       meta: {
         totalItems: count,
         totalPages: Math.ceil(count / limit),

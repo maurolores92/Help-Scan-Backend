@@ -4,6 +4,7 @@ import {
 } from './services/whatsapp-channel.service';
 import {
   WhatsappConnectionStatus,
+  WhatsappGroupPolicy,
   WhatsappSenderPolicy,
   WhatsappSyncStatus,
 } from './models/company-whatsapp-channel.model';
@@ -200,5 +201,129 @@ describe('WhatsappChannelService (QR Baileys)', () => {
 
     // Procesamiento 100% interno: nunca debe enviar mensajes salientes por WhatsApp
     expect(baileysService.sendTextMessage).not.toHaveBeenCalled();
+  });
+
+  it('procesa PDFs de cualquier integrante en grupos autorizados e ignora grupos no autorizados', async () => {
+    const channelRecord: any = {
+      id: 4,
+      companyId: 7,
+      sessionKey: 'company_7',
+      senderPolicy: WhatsappSenderPolicy.WHITELIST,
+      allowedPhones: ['5491144445555'],
+      ignoreGroups: false,
+      groupPolicy: WhatsappGroupPolicy.WHITELIST,
+      allowedGroups: [{ jid: '120363999@g.us', name: 'Facturas Proveedores' }],
+      isActive: true,
+      processImages: true,
+      autoReplyConfirmation: false,
+      lastSyncStatus: WhatsappSyncStatus.IDLE,
+      update: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const createdMessages: any[] = [];
+    const whatsappChannelModel: any = {
+      findOne: jest.fn().mockResolvedValue(channelRecord),
+    };
+    const whatsappMessageModel: any = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockImplementation(async (payload) => {
+        const rec: any = {
+          id: createdMessages.length + 1,
+          ...payload,
+          update: jest.fn().mockImplementation(async (patch) => {
+            Object.assign(rec, patch);
+            return rec;
+          }),
+        };
+        createdMessages.push(rec);
+        return rec;
+      }),
+    };
+    const companyModel: any = {
+      findByPk: jest.fn().mockResolvedValue({
+        id: 7,
+        status: CompanyStatus.ACTIVE,
+        enabledModules: ['documents', 'whatsapp'],
+      }),
+    };
+    const baileysService: any = {
+      registerIncomingMessagesHandler: jest.fn(),
+      downloadMessageMedia: jest.fn().mockResolvedValue(Buffer.from('%PDF-1.7\nGroupPDF')),
+      resolveGroupSubject: jest.fn().mockResolvedValue('Facturas Proveedores'),
+    };
+    const documentsService: any = {
+      ingestPdfFromChannel: jest.fn().mockResolvedValue({
+        document: { id: 808 },
+        isDuplicate: false,
+      }),
+    };
+
+    const service = new WhatsappChannelService(
+      whatsappChannelModel,
+      whatsappMessageModel,
+      companyModel,
+      baileysService,
+      documentsService,
+      { registerPostProcessHook: jest.fn() } as any,
+      { log: jest.fn().mockResolvedValue(undefined) } as any,
+      { dispatch: jest.fn().mockResolvedValue(undefined) } as any,
+    );
+
+    await service.handleIncomingBaileysMessages(7, [
+      // Grupo NO autorizado -> debe ignorarse
+      {
+        key: {
+          id: 'wa.unauth_group',
+          fromMe: false,
+          remoteJid: '120363111@g.us',
+          participant: '5491199998888@s.whatsapp.net',
+        },
+        message: {
+          documentMessage: { mimetype: 'application/pdf', fileName: 'asado.pdf' },
+        },
+      },
+      // Grupo autorizado + integrante NO listado en allowedPhones -> debe procesarse
+      {
+        key: {
+          id: 'wa.auth_group',
+          fromMe: false,
+          remoteJid: '120363999@g.us',
+          participant: '5491177776666@s.whatsapp.net',
+        },
+        pushName: 'Proveedor Nuevo',
+        messageTimestamp: 1763590020,
+        message: {
+          documentMessage: { mimetype: 'application/pdf', fileName: 'factura_prov.pdf' },
+        },
+      },
+      // Grupo autorizado + mensaje enviado por tu propia cuenta (fromMe=true) -> también debe procesarse
+      {
+        key: {
+          id: 'wa.auth_group_fromme',
+          fromMe: true,
+          remoteJid: '120363999@g.us',
+        },
+        pushName: 'Mi Cuenta',
+        messageTimestamp: 1763590030,
+        message: {
+          documentMessage: { mimetype: 'application/pdf', fileName: 'factura_propia.pdf' },
+        },
+      },
+    ]);
+
+    expect(documentsService.ingestPdfFromChannel).toHaveBeenCalledTimes(2);
+    expect(documentsService.ingestPdfFromChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companyId: 7,
+        originalName: 'factura_prov.pdf',
+        channelContextLabel: expect.stringContaining("WhatsApp Grupo 'Facturas Proveedores'"),
+      }),
+    );
+    expect(createdMessages).toHaveLength(2);
+    expect(createdMessages[0].status).toBe(WhatsappMessageStatus.PROCESSED);
+    expect(createdMessages[0].groupJid).toBe('120363999@g.us');
+    expect(createdMessages[0].groupName).toBe('Facturas Proveedores');
+    expect(createdMessages[1].status).toBe(WhatsappMessageStatus.PROCESSED);
+    expect(createdMessages[1].groupJid).toBe('120363999@g.us');
   });
 });

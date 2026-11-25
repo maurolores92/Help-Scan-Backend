@@ -59,31 +59,34 @@ export interface UniversalDocumentExtractionResult {
 const KNOWN_TYPE_PATTERNS: Array<{ type: string; regex: RegExp }> = [
   {
     type: 'nota_credito',
-    regex: /\b(nota\s+de\s+cr[eé]dito|credit\s+note|n\.?\s*c\.?\s*[abcme]\b|c[oó]d\.?\s*(?:0?03|0?08|0?13|0?53|203|208|213)\b)/i,
+    regex: /\b(nota\s+de\s+cr[eé]dito|credit\s+note|n\.?\s*c\.?\s*[abcme]\b|c[oó]d(?:igo)?\.?\s*(?:0?03|0?08|0?13|0?53|203|208|213)\b)/i,
   },
   {
     type: 'nota_debito',
-    regex: /\b(nota\s+de\s+d[eé]bito|debit\s+note|n\.?\s*d\.?\s*[abcme]\b|c[oó]d\.?\s*(?:0?02|0?07|0?12|0?52|202|207|212)\b)/i,
+    regex: /\b(nota\s+de\s+d[eé]bito|debit\s+note|n\.?\s*d\.?\s*[abcme]\b|c[oó]d(?:igo)?\.?\s*(?:0?02|0?07|0?12|0?52|202|207|212)\b)/i,
+  },
+  {
+    type: 'ticket_fiscal',
+    regex: /\b(tique\s+factura|ticket\s+factura|controlador\s+fiscal|tique\s+consumidor\s+final|c[oó]d(?:igo)?\.?\s*(?:0?81|0?82|0?83|111)\b)/i,
+  },
+  {
+    type: 'factura',
+    regex: /\b(factura|invoice|comprobante\s+electr[oó]nico|c[oó]d(?:igo)?\.?\s*(?:0?01|0?06|0?11|0?51|201|206|211)\b|cae\b)/i,
   },
   {
     type: 'certificado_retencion',
     regex: /\b(certificado\s+de\s+retenci[oó]n|constancia\s+de\s+retenci[oó]n|agente\s+de\s+retenci[oó]n|sicore|sire\b)/i,
   },
   { type: 'orden_pago', regex: /\b(orden\s+de\s+pago)\b/i },
-  {
-    type: 'transferencia_pago',
-    regex: /\b(comprobante\s+de\s+transferencia|transferencia\s+bancaria|id\s*coelsa|comprobante\s+de\s+dep[oó]sito|debin\b)/i,
-  },
-  {
-    type: 'ticket_fiscal',
-    regex: /\b(tique\s+factura|ticket\s+factura|controlador\s+fiscal|tique\s+consumidor\s+final|c[oó]d\.?\s*(?:0?81|0?82|0?83|111)\b)/i,
-  },
-  { type: 'factura', regex: /\b(factura|invoice|comprobante\s+electr[oó]nico|cae\b)/i },
   { type: 'presupuesto', regex: /\b(presupuesto|cotizaci[oó]n|quotation)/i },
   { type: 'nota_pedido', regex: /\b(nota\s+de\s+pedido|solicitud\s+de\s+compra)/i },
   { type: 'orden_compra', regex: /\b(orden\s+de\s+compra|purchase\s+order|\bo[\.\s]?c[\.\s]?\b)/i },
   { type: 'remito', regex: /\b(remito|gu[ií]a\s+de\s+despacho|entrega\s+de\s+mercader[ií]a)/i },
   { type: 'recibo', regex: /\b(recibo|comprobante\s+de\s+pago)/i },
+  {
+    type: 'transferencia_pago',
+    regex: /\b(comprobante\s+de\s+transferencia|transferencia\s+(?:bancaria|realizada|exitosa|enviada|recibida)|id\s*coelsa|comprobante\s+de\s+dep[oó]sito|debin\b)/i,
+  },
   { type: 'orden_servicio', regex: /\b(servicio\s+t[eé]cnico|orden\s+de\s+servicio|parte\s+t[eé]cnico|informe\s+t[eé]cnico)/i },
   { type: 'contrato', regex: /\b(contrato|acuerdo|convenio|cl[aá]usula)/i },
   { type: 'legajo', regex: /\b(legajo|curr[ií]culum|recibo\s+de\s+haberes|alta\s+temprana)/i },
@@ -92,11 +95,12 @@ const KNOWN_TYPE_PATTERNS: Array<{ type: string; regex: RegExp }> = [
 const ARCA_DEBIT_NOTE_CODES = new Set(['002', '007', '012', '052', '202', '207', '212', '2', '7', '12', '52']);
 const ARCA_CREDIT_NOTE_CODES = new Set(['003', '008', '013', '053', '203', '208', '213', '3', '8', '13', '53']);
 const ARCA_TICKET_CODES = new Set(['081', '082', '083', '111', '81', '82', '83']);
+const ARCA_INVOICE_CODES = new Set(['001', '006', '011', '051', '201', '206', '211', '1', '6', '11', '51']);
 
 /**
- * Refina el documentType cuando Gemini u otro extractor devuelve "factura" u "otro",
+ * Refina el documentType cuando Gemini u otro extractor devuelve "factura", "transferencia_pago" u "otro",
  * pero los códigos ARCA o el encabezado del comprobante identifican inequívocamente
- * una Nota de Débito, Nota de Crédito o Tique Fiscal.
+ * una Factura, Nota de Débito, Nota de Crédito o Tique Fiscal.
  */
 export function refineArcaDocumentType(
   rawType?: string | null,
@@ -116,6 +120,7 @@ export function refineArcaDocumentType(
     if (ARCA_CREDIT_NOTE_CODES.has(arcaCode)) return 'nota_credito';
     if (ARCA_DEBIT_NOTE_CODES.has(arcaCode)) return 'nota_debito';
     if (ARCA_TICKET_CODES.has(arcaCode)) return 'ticket_fiscal';
+    if (ARCA_INVOICE_CODES.has(arcaCode)) return 'factura';
   }
 
   const subtipo = String(attrs.subtipo_fiscal || attrs.clase_comprobante || '').toLowerCase();
@@ -126,17 +131,32 @@ export function refineArcaDocumentType(
     return 'nota_debito';
   }
 
-  // Si se clasificó genéricamente como factura/comprobante/otro, revisar cabecera del texto o resumen
-  if (norm === 'otro' || norm === 'documento_general' || norm.startsWith('factura')) {
-    const headerSample = `${String(summary || '')}\n${String(rawText || '').slice(0, 1200)}`;
-    if (/\b(nota\s+de\s+cr[eé]dito|c[oó]d\.?\s*(?:0?03|0?08|0?13|0?53|203|208|213))\b/i.test(headerSample)) {
+  // Si se clasificó genéricamente o se confundió con transferencia por los datos bancarios del pie
+  if (
+    norm === 'otro' ||
+    norm === 'documento_general' ||
+    norm === 'transferencia_pago' ||
+    norm.startsWith('factura')
+  ) {
+    const headerSample = `${String(summary || '')}\n${String(rawText || '').slice(0, 1400)}`;
+    if (/\b(nota\s+de\s+cr[eé]dito|c[oó]d(?:igo)?\.?\s*(?:0?03|0?08|0?13|0?53|203|208|213))\b/i.test(headerSample)) {
       return 'nota_credito';
     }
-    if (/\b(nota\s+de\s+d[eé]bito|c[oó]d\.?\s*(?:0?02|0?07|0?12|0?52|202|207|212))\b/i.test(headerSample)) {
+    if (/\b(nota\s+de\s+d[eé]bito|c[oó]d(?:igo)?\.?\s*(?:0?02|0?07|0?12|0?52|202|207|212))\b/i.test(headerSample)) {
       return 'nota_debito';
     }
-    if (/\b(tique\s+factura|ticket\s+factura|controlador\s+fiscal|c[oó]d\.?\s*(?:0?81|0?82|0?83|111))\b/i.test(headerSample)) {
+    if (/\b(tique\s+factura|ticket\s+factura|controlador\s+fiscal|c[oó]d(?:igo)?\.?\s*(?:0?81|0?82|0?83|111))\b/i.test(headerSample)) {
       return 'ticket_fiscal';
+    }
+    if (
+      norm === 'transferencia_pago' &&
+      !/\bcomprobante\s+de\s+transferencia\b/i.test(headerSample) &&
+      (/\b(comprobante\s+factura|factura\s+[abcme]|c[oó]d(?:igo)?\.?\s*(?:0?01|0?06|0?11|0?51|201))\b/i.test(
+        headerSample,
+      ) ||
+        /\bC\.?A\.?E\.?\s*[:#N°]?\s*\d{14}\b/i.test(String(rawText || '')))
+    ) {
+      return 'factura';
     }
   }
 
@@ -437,13 +457,22 @@ export const extractUniversalHeuristicsFromText = (
   pageCount: number,
 ): UniversalDocumentExtractionResult => {
   const cleanText = (rawText || '').replace(/\r/g, '').trim();
+  const headerSource = `${originalFileName}\n${cleanText.slice(0, 900)}`;
   const combinedSource = `${originalFileName}\n${cleanText}`;
 
   let detectedType = 'documento_general';
   for (const candidate of KNOWN_TYPE_PATTERNS) {
-    if (candidate.regex.test(combinedSource)) {
+    if (candidate.regex.test(headerSource)) {
       detectedType = candidate.type;
       break;
+    }
+  }
+  if (detectedType === 'documento_general') {
+    for (const candidate of KNOWN_TYPE_PATTERNS) {
+      if (candidate.regex.test(combinedSource)) {
+        detectedType = candidate.type;
+        break;
+      }
     }
   }
 

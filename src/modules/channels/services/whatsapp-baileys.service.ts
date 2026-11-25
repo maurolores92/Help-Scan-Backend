@@ -53,6 +53,7 @@ export class WhatsappBaileysService
   private readonly logger = new Logger(WhatsappBaileysService.name);
   private readonly sessions = new Map<number, ActiveSessionEntry>();
   private readonly connectingLocks = new Set<number>();
+  private readonly groupSubjectCache = new Map<number, Map<string, string>>();
   private incomingHandler: IncomingMessagesHandler | null = null;
   private baileysModulePromise: Promise<any> | null = null;
 
@@ -420,15 +421,22 @@ export class WhatsappBaileysService
         if (upsert?.type !== 'notify' || !Array.isArray(upsert?.messages)) {
           return;
         }
-        // Filtrar en origen: solo pasar mensajes entrantes que contengan documento o imagen adjunta
+        // Filtrar en origen: solo mensajes con adjunto (en grupos permitimos también fromMe para grupos autorizados)
         const attachmentMessages = upsert.messages.filter((m: any) => {
-          if (!m || m?.key?.fromMe) return false;
+          if (!m) return false;
           const jid = String(m?.key?.remoteJid || '').trim();
           if (!jid || jid === 'status@broadcast') return false;
+          const isGroup = jid.endsWith('@g.us');
+          if (m?.key?.fromMe && !isGroup) return false;
           return extractWhatsappAttachmentInfo(m.message).hasAttachment;
         });
 
         if (attachmentMessages.length > 0 && this.incomingHandler) {
+          this.logger.log(
+            `[WhatsApp company_${companyId}] ${attachmentMessages.length} mensaje(s) con adjunto recibido(s): ${attachmentMessages
+              .map((m: any) => `${m?.key?.remoteJid}${m?.key?.fromMe ? ' (fromMe)' : ''}`)
+              .join(', ')}`,
+          );
           await this.incomingHandler(companyId, attachmentMessages).catch(
             (err) => {
               this.logger.error(
@@ -534,5 +542,80 @@ export class WhatsappBaileysService
     await entry.sock.sendMessage(jid, {
       text: text.slice(0, 4000),
     });
+  }
+
+  /**
+   * Lista todos los grupos en los que participa la sesión conectada de WhatsApp.
+   */
+  async listParticipatingGroups(companyId: number): Promise<{
+    connected: boolean;
+    groups: Array<{ jid: string; name: string; participantsCount: number }>;
+  }> {
+    const entry = this.sessions.get(companyId);
+    if (
+      !entry?.sock ||
+      entry.connectionStatus !== WhatsappConnectionStatus.CONNECTED
+    ) {
+      return { connected: false, groups: [] };
+    }
+
+    try {
+      const participating = await entry.sock.groupFetchAllParticipating();
+      const cache =
+        this.groupSubjectCache.get(companyId) || new Map<string, string>();
+      const list = Object.values(participating || {})
+        .map((g: any) => {
+          const jid = String(g?.id || '').trim();
+          const name = String(g?.subject || jid).trim();
+          const participantsCount = Array.isArray(g?.participants)
+            ? g.participants.length
+            : 0;
+          if (jid && name) cache.set(jid, name);
+          return { jid, name, participantsCount };
+        })
+        .filter((g) => g.jid.endsWith('@g.us'))
+        .sort((a, b) => a.name.localeCompare(b.name, 'es'));
+
+      this.groupSubjectCache.set(companyId, cache);
+      return { connected: true, groups: list };
+    } catch (err: any) {
+      this.logger.warn(
+        `[WhatsApp company_${companyId}] Error listando grupos: ${err?.message}`,
+      );
+      return { connected: true, groups: [] };
+    }
+  }
+
+  /**
+   * Resuelve el asunto/nombre de un grupo a partir de caché o metadata de Baileys.
+   */
+  async resolveGroupSubject(
+    companyId: number,
+    groupJid: string,
+  ): Promise<string | null> {
+    const cached = this.groupSubjectCache.get(companyId)?.get(groupJid);
+    if (cached) return cached;
+
+    const entry = this.sessions.get(companyId);
+    if (
+      !entry?.sock ||
+      entry.connectionStatus !== WhatsappConnectionStatus.CONNECTED
+    ) {
+      return null;
+    }
+
+    try {
+      const meta = await entry.sock.groupMetadata(groupJid);
+      const subject = meta?.subject ? String(meta.subject).trim() : null;
+      if (subject) {
+        const cache =
+          this.groupSubjectCache.get(companyId) || new Map<string, string>();
+        cache.set(groupJid, subject);
+        this.groupSubjectCache.set(companyId, cache);
+      }
+      return subject;
+    } catch {
+      return null;
+    }
   }
 }

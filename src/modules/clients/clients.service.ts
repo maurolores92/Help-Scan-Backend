@@ -5,7 +5,11 @@ import { Sequelize } from 'sequelize-typescript';
 import { Client } from './client.model';
 import { Document, DocumentStatus } from '../documents/document.model';
 import { DocumentLink } from '../documents/models/document-link.model';
-import { computeDocumentBalanceSummary } from '../documents/helpers/document-balance.helper';
+import {
+  computeDocumentBalanceSummary,
+  computeSourceImputationSummary,
+} from '../documents/helpers/document-balance.helper';
+import { computeClientAccountStatement } from './helpers/client-account-statement.helper';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/audit.model';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -246,7 +250,16 @@ export class ClientsService {
       throw new NotFoundException(`Cliente #${id} no encontrado en tu compañía`);
     }
 
-    const { documentType, role = 'all', status, search, page = 1, limit = 15 } = query;
+    const {
+      documentType,
+      role = 'all',
+      status,
+      paymentStatus,
+      linkState = 'all',
+      search,
+      page = 1,
+      limit = 15,
+    } = query;
 
     const allCompanyDocs = await this.documentModel.findAll({
       where: { companyId: scopedCompanyId },
@@ -323,93 +336,130 @@ export class ClientsService {
       }
     }
 
+    const allLinksByDocId = new Map<number, any[]>();
+    if (this.documentLinkModel && related.length > 0) {
+      const relatedIds = related.map((item) => item.doc.id);
+      const links = await this.documentLinkModel.findAll({
+        where: {
+          companyId: scopedCompanyId,
+          [Op.or]: [{ sourceDocumentId: relatedIds }, { targetDocumentId: relatedIds }],
+        },
+        include: [{ model: Document, as: 'sourceDocument', attributes: ['id', 'totalAmount'] }],
+      });
+      for (const lnk of links) {
+        const plainLink = typeof (lnk as any).toJSON === 'function' ? (lnk as any).toJSON() : lnk;
+        const srcList = allLinksByDocId.get(plainLink.sourceDocumentId) || [];
+        srcList.push(plainLink);
+        allLinksByDocId.set(plainLink.sourceDocumentId, srcList);
+
+        if (plainLink.targetDocumentId !== plainLink.sourceDocumentId) {
+          const tgtList = allLinksByDocId.get(plainLink.targetDocumentId) || [];
+          tgtList.push(plainLink);
+          allLinksByDocId.set(plainLink.targetDocumentId, tgtList);
+        }
+      }
+    }
+
+    const enrichedRelated = related.map(({ doc, clientRole, normalizedType }) => {
+      const docLinks = allLinksByDocId.get(doc.id) || [];
+      const linkInputs = docLinks.map((l) => ({
+        sourceDocumentId: l.sourceDocumentId,
+        targetDocumentId: l.targetDocumentId,
+        linkType: l.linkType,
+        appliedAmount: l.appliedAmount,
+        sourceTotalAmount: l.sourceDocument?.totalAmount,
+      }));
+      const balanceSummary = computeDocumentBalanceSummary({
+        documentId: doc.id,
+        documentType: doc.documentType,
+        totalAmount: doc.totalAmount,
+        currentPaymentStatus: doc.paymentStatus,
+        links: linkInputs,
+      });
+      const imputationSummary = computeSourceImputationSummary({
+        documentId: doc.id,
+        documentType: doc.documentType,
+        totalAmount: doc.totalAmount,
+        links: linkInputs,
+      });
+
+      return {
+        doc,
+        clientRole,
+        normalizedType,
+        linkedCount: docLinks.length,
+        balanceSummary,
+        imputationSummary,
+      };
+    });
+
+    const accountStatement = computeClientAccountStatement(enrichedRelated);
+
     const searchClean = cleanNullableString(search)?.toLowerCase() || '';
     const requestedType =
       documentType && documentType !== 'all'
         ? normalizeDocumentTypeBucket(documentType)
         : null;
 
-    const filtered = related.filter(({ doc, clientRole, normalizedType }) => {
-      if (requestedType && normalizedType !== requestedType) return false;
-      if (role === 'issuer' && clientRole !== 'issuer' && clientRole !== 'both') return false;
-      if (role === 'recipient' && clientRole !== 'recipient' && clientRole !== 'both') return false;
-      if (role === 'linked' && clientRole !== 'linked') return false;
-      if (status && doc.status !== status) return false;
+    const filtered = enrichedRelated.filter(
+      ({ doc, clientRole, normalizedType, linkedCount, balanceSummary }) => {
+        if (requestedType && normalizedType !== requestedType) return false;
+        if (role === 'issuer' && clientRole !== 'issuer' && clientRole !== 'both') return false;
+        if (role === 'recipient' && clientRole !== 'recipient' && clientRole !== 'both') return false;
+        if (role === 'linked' && clientRole !== 'linked') return false;
+        if (status && doc.status !== status) return false;
 
-      if (searchClean) {
-        const haystack = [
-          doc.originalName,
-          doc.documentNumber,
-          doc.documentType,
-          doc.issuerName,
-          doc.issuerTaxId,
-          doc.recipientName,
-          doc.recipientTaxId,
-          doc.purchaseOrderNumber,
-          doc.referenceNumber,
-          doc.summary,
-        ]
-          .filter(Boolean)
-          .join(' ')
-          .toLowerCase();
-        if (!haystack.includes(searchClean)) return false;
-      }
+        if (linkState === 'linked' && linkedCount === 0) return false;
+        if (linkState === 'unlinked' && linkedCount > 0) return false;
 
-      return true;
-    });
+        if (paymentStatus && paymentStatus !== 'all') {
+          const effectivePayStatus = balanceSummary.isTrackable
+            ? balanceSummary.derivedPaymentStatus
+            : doc.paymentStatus;
+          if (paymentStatus === 'UNPAID_OR_PARTIAL') {
+            if (effectivePayStatus !== 'PENDING' && effectivePayStatus !== 'PARTIALLY_PAID') {
+              return false;
+            }
+          } else if (effectivePayStatus !== paymentStatus) {
+            return false;
+          }
+        }
+
+        if (searchClean) {
+          const haystack = [
+            doc.originalName,
+            doc.documentNumber,
+            doc.documentType,
+            doc.issuerName,
+            doc.issuerTaxId,
+            doc.recipientName,
+            doc.recipientTaxId,
+            doc.purchaseOrderNumber,
+            doc.referenceNumber,
+            doc.summary,
+          ]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+          if (!haystack.includes(searchClean)) return false;
+        }
+
+        return true;
+      },
+    );
 
     const totalItems = filtered.length;
     const offset = (page - 1) * limit;
-    const pagedRaw = filtered.slice(offset, offset + limit);
-
-    let linksByDocId = new Map<number, any[]>();
-    if (this.documentLinkModel && pagedRaw.length > 0) {
-      const pagedIds = pagedRaw.map((item) => item.doc.id);
-      const links = await this.documentLinkModel.findAll({
-        where: {
-          companyId: scopedCompanyId,
-          [Op.or]: [{ sourceDocumentId: pagedIds }, { targetDocumentId: pagedIds }],
-        },
-        include: [{ model: Document, as: 'sourceDocument', attributes: ['id', 'totalAmount'] }],
-      });
-      for (const lnk of links) {
-        const plainLink = typeof (lnk as any).toJSON === 'function' ? (lnk as any).toJSON() : lnk;
-        const srcList = linksByDocId.get(plainLink.sourceDocumentId) || [];
-        srcList.push(plainLink);
-        linksByDocId.set(plainLink.sourceDocumentId, srcList);
-
-        if (plainLink.targetDocumentId !== plainLink.sourceDocumentId) {
-          const tgtList = linksByDocId.get(plainLink.targetDocumentId) || [];
-          tgtList.push(plainLink);
-          linksByDocId.set(plainLink.targetDocumentId, tgtList);
-        }
-      }
-    }
-
-    const paged = pagedRaw.map(({ doc, clientRole, normalizedType }) => {
-      const docLinks = linksByDocId.get(doc.id) || [];
-      const balanceSummary = computeDocumentBalanceSummary({
-        documentId: doc.id,
-        documentType: doc.documentType,
-        totalAmount: doc.totalAmount,
-        currentPaymentStatus: doc.paymentStatus,
-        links: docLinks.map((l) => ({
-          sourceDocumentId: l.sourceDocumentId,
-          targetDocumentId: l.targetDocumentId,
-          linkType: l.linkType,
-          appliedAmount: l.appliedAmount,
-          sourceTotalAmount: l.sourceDocument?.totalAmount,
-        })),
-      });
-
-      return {
+    const paged = filtered
+      .slice(offset, offset + limit)
+      .map(({ doc, clientRole, normalizedType, linkedCount, balanceSummary, imputationSummary }) => ({
         ...doc,
         clientRole,
         normalizedDocumentType: normalizedType,
-        linkedCount: docLinks.length,
+        linkedCount,
         balanceSummary,
-      };
-    });
+        imputationSummary,
+      }));
 
     const typeCounts = Object.entries(byTypeMap)
       .map(([type, count]) => ({ documentType: type, count }))
@@ -424,6 +474,7 @@ export class ClientsService {
         byStatus,
         byType: byTypeMap,
         typeCounts,
+        accountStatement,
       },
       meta: {
         totalItems,

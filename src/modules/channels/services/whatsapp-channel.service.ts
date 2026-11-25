@@ -9,8 +9,10 @@ import {
 import { InjectModel } from '@nestjs/sequelize';
 import { Op } from 'sequelize';
 import {
+  AllowedWhatsappGroup,
   CompanyWhatsappChannel,
   WhatsappConnectionStatus,
+  WhatsappGroupPolicy,
   WhatsappSenderPolicy,
   WhatsappSyncStatus,
 } from '../models/company-whatsapp-channel.model';
@@ -96,6 +98,8 @@ export class WhatsappChannelService implements OnModuleInit {
         senderPolicy: WhatsappSenderPolicy.ALL,
         allowedPhones: [],
         ignoreGroups: true,
+        groupPolicy: WhatsappGroupPolicy.IGNORE,
+        allowedGroups: [],
         isActive: true,
         processImages: true,
         autoReplyConfirmation: false,
@@ -111,12 +115,22 @@ export class WhatsappChannelService implements OnModuleInit {
   ) {
     const runtime = this.baileysService.getRuntimeSnapshot(companyId, channel);
     const plain = channel ? (channel.toJSON() as any) : null;
+    const resolvedGroupPolicy = plain
+      ? plain.groupPolicy ||
+        (plain.ignoreGroups === false
+          ? WhatsappGroupPolicy.ALL
+          : WhatsappGroupPolicy.IGNORE)
+      : WhatsappGroupPolicy.IGNORE;
 
     return {
       configured: Boolean(channel),
       channel: plain
         ? {
             ...plain,
+            groupPolicy: resolvedGroupPolicy,
+            allowedGroups: Array.isArray(plain.allowedGroups)
+              ? plain.allowedGroups
+              : [],
             connectionStatus: runtime.connectionStatus,
             connectedPhone: runtime.connectedPhone || plain.connectedPhone,
             connectedName: runtime.connectedName || plain.connectedName,
@@ -132,6 +146,11 @@ export class WhatsappChannelService implements OnModuleInit {
       where: { companyId },
     });
     return this.buildSafeStatusResponse(channel, companyId);
+  }
+
+  async listGroups(user: any) {
+    const companyId = this.assertTenantUser(user);
+    return this.baileysService.listParticipatingGroups(companyId);
   }
 
   async connectQr(user: any) {
@@ -218,14 +237,45 @@ export class WhatsappChannelService implements OnModuleInit {
         )
       : channel.allowedPhones || [];
 
+    const normalizedAllowedGroups: AllowedWhatsappGroup[] = Array.isArray(
+      dto.allowedGroups,
+    )
+      ? Array.from(
+          new Map(
+            dto.allowedGroups
+              .map((g) => ({
+                jid: String(g?.jid || '').trim(),
+                name: String(g?.name || g?.jid || '').trim(),
+              }))
+              .filter((g) => g.jid.endsWith('@g.us'))
+              .map((g) => [g.jid, g]),
+          ).values(),
+        )
+      : channel.allowedGroups || [];
+
+    const nextGroupPolicy: WhatsappGroupPolicy =
+      dto.groupPolicy !== undefined
+        ? dto.groupPolicy
+        : dto.ignoreGroups !== undefined
+          ? dto.ignoreGroups
+            ? WhatsappGroupPolicy.IGNORE
+            : WhatsappGroupPolicy.ALL
+          : channel.groupPolicy ||
+            (channel.ignoreGroups === false
+              ? WhatsappGroupPolicy.ALL
+              : WhatsappGroupPolicy.IGNORE);
+
+    const nextIgnoreGroups = nextGroupPolicy === WhatsappGroupPolicy.IGNORE;
+
     const nextActive =
       dto.isActive !== undefined ? dto.isActive : channel.isActive;
 
     await channel.update({
       senderPolicy: dto.senderPolicy ?? channel.senderPolicy,
       allowedPhones: normalizedAllowedPhones,
-      ignoreGroups:
-        dto.ignoreGroups !== undefined ? dto.ignoreGroups : channel.ignoreGroups,
+      ignoreGroups: nextIgnoreGroups,
+      groupPolicy: nextGroupPolicy,
+      allowedGroups: normalizedAllowedGroups,
       isActive: nextActive,
       processImages:
         dto.processImages !== undefined
@@ -305,14 +355,36 @@ export class WhatsappChannelService implements OnModuleInit {
         continue;
       }
 
-      // Ignorar mensajes salientes propios
-      if (msg?.key?.fromMe) {
+      const isGroup = remoteJid.endsWith('@g.us');
+      const effectiveGroupPolicy: WhatsappGroupPolicy =
+        channel.groupPolicy ||
+        (channel.ignoreGroups === false
+          ? WhatsappGroupPolicy.ALL
+          : WhatsappGroupPolicy.IGNORE);
+
+      // En chats privados 1-a-1 ignorar mensajes propios; en grupos autorizados sí se procesan aunque los envíe tu propia cuenta
+      if (!isGroup && msg?.key?.fromMe) {
         continue;
       }
 
-      const isGroup = remoteJid.endsWith('@g.us');
-      if (isGroup && channel.ignoreGroups) {
-        continue;
+      if (isGroup) {
+        if (effectiveGroupPolicy === WhatsappGroupPolicy.IGNORE) {
+          this.logger.debug(
+            `[WhatsApp company_${companyId}] Adjunto de grupo ${remoteJid} ignorado (groupPolicy=IGNORE).`,
+          );
+          continue;
+        }
+        if (effectiveGroupPolicy === WhatsappGroupPolicy.WHITELIST) {
+          const allowedGroupSet = new Set(
+            (channel.allowedGroups || []).map((g) => String(g?.jid || '').trim()),
+          );
+          if (!allowedGroupSet.has(remoteJid)) {
+            this.logger.log(
+              `[WhatsApp company_${companyId}] Adjunto de grupo ${remoteJid} omitido: no está en los ${allowedGroupSet.size} grupo(s) autorizado(s).`,
+            );
+            continue;
+          }
+        }
       }
 
       // Solo obtener y procesar mensajes que traen un documento o imagen adjunta
@@ -335,10 +407,22 @@ export class WhatsappChannelService implements OnModuleInit {
         msg?.key?.participantAlt ||
           msg?.key?.participant ||
           msg?.key?.remoteJidAlt ||
+          (isGroup && msg?.key?.fromMe ? channel.connectedPhone || '' : '') ||
           remoteJid,
       );
-      const senderPhone = normalizeWhatsappPhone(rawSenderJid) || 'desconocido';
+      const senderPhone = (normalizeWhatsappPhone(rawSenderJid) || 'desconocido').slice(0, 40);
       const senderName = msg?.pushName ? String(msg.pushName).trim() : null;
+
+      let groupName: string | null = null;
+      if (isGroup) {
+        const matchedSaved = (channel.allowedGroups || []).find(
+          (g) => String(g?.jid || '').trim() === remoteJid,
+        );
+        groupName =
+          matchedSaved?.name ||
+          (await this.baileysService.resolveGroupSubject?.(companyId, remoteJid)) ||
+          remoteJid;
+      }
 
       const tsSec = Number(msg?.messageTimestamp);
       const receivedAt =
@@ -347,8 +431,8 @@ export class WhatsappChannelService implements OnModuleInit {
       const textBody = docMsg?.caption || imgMsg?.caption || null;
       const msgType = docMsg ? 'document' : 'image';
 
-      // Validar lista blanca si está configurada
-      if (channel.senderPolicy === WhatsappSenderPolicy.WHITELIST) {
+      // En chats privados 1-a-1 respetar Lista Blanca de teléfonos; dentro de un grupo autorizado se procesa de cualquier integrante
+      if (!isGroup && channel.senderPolicy === WhatsappSenderPolicy.WHITELIST) {
         const allowedSet = new Set(
           (channel.allowedPhones || []).map((p) => normalizeWhatsappPhone(p)),
         );
@@ -378,6 +462,8 @@ export class WhatsappChannelService implements OnModuleInit {
           externalMessageId,
           senderPhone,
           replyJid: remoteJid,
+          groupJid: isGroup ? remoteJid : null,
+          groupName,
           senderName,
           messageType: 'image',
           mimeType: imgMsg.mimetype || 'image/jpeg',
@@ -405,6 +491,8 @@ export class WhatsappChannelService implements OnModuleInit {
         externalMessageId,
         senderPhone,
         replyJid: remoteJid,
+        groupJid: isGroup ? remoteJid : null,
+        groupName,
         senderName,
         messageType: msgType,
         fileName: reportedFileName.slice(0, 250),
@@ -455,7 +543,9 @@ export class WhatsappChannelService implements OnModuleInit {
             originalName: finalFileName,
             mimeType: 'application/pdf',
             source: DocumentSource.WHATSAPP,
-            channelContextLabel: `WhatsApp ${senderName ? `${senderName} (+${senderPhone})` : `+${senderPhone}`}`,
+            channelContextLabel: groupName
+              ? `WhatsApp Grupo '${groupName}' · ${senderName || `+${senderPhone}`}`
+              : `WhatsApp ${senderName ? `${senderName} (+${senderPhone})` : `+${senderPhone}`}`,
           });
 
         await record.update({
@@ -470,13 +560,13 @@ export class WhatsappChannelService implements OnModuleInit {
         await channel.update({
           lastMessageAt: new Date(),
           lastSyncStatus: WhatsappSyncStatus.OK,
-          lastSyncMessage: `Último comprobante recibido de ${senderName || `+${senderPhone}`}.`,
+          lastSyncMessage: `Último comprobante recibido de ${senderName || `+${senderPhone}`}${groupName ? ` (Grupo: ${groupName})` : ''}.`,
         });
 
         await this.notificationsService.dispatch({
           type: 'channel.whatsapp_received',
           title: '📲 Comprobante recibido por WhatsApp',
-          body: `Se recibió '${finalFileName}' desde ${senderName || `+${senderPhone}`}.`,
+          body: `Se recibió '${finalFileName}' desde ${senderName || `+${senderPhone}`}${groupName ? ` en grupo '${groupName}'` : ''}.`,
           companyId,
           extraData: { documentId: document.id, whatsappMessageId: record.id, link: '/whatsapp' },
         });
@@ -527,6 +617,7 @@ export class WhatsappChannelService implements OnModuleInit {
       where[Op.or] = [
         { senderPhone: { [Op.iLike]: term } },
         { senderName: { [Op.iLike]: term } },
+        { groupName: { [Op.iLike]: term } },
         { fileName: { [Op.iLike]: term } },
         { caption: { [Op.iLike]: term } },
       ];

@@ -18,6 +18,7 @@ import {
   BALANCE_TOLERANCE_AMOUNT,
   DocumentBalanceSummary,
   computeDocumentBalanceSummary,
+  computeSourceImputationSummary,
   toNumericAmount,
 } from '../helpers/document-balance.helper';
 import {
@@ -197,6 +198,17 @@ export class DocumentLinksService {
     });
 
     const balanceSummary = await this.recalculateDocumentBalance(doc.id, scopedCompanyId);
+    const sourceImputationSummary = computeSourceImputationSummary({
+      documentId: doc.id,
+      documentType: doc.documentType,
+      totalAmount: doc.totalAmount,
+      links: activeLinks.map((lnk) => ({
+        sourceDocumentId: lnk.sourceDocumentId,
+        targetDocumentId: lnk.targetDocumentId,
+        linkType: lnk.linkType,
+        appliedAmount: lnk.appliedAmount,
+      })),
+    });
     const alreadyLinkedIds = new Set<number>([doc.id]);
     const formattedLinks = activeLinks.map((lnk) => {
       const isOutgoing = lnk.sourceDocumentId === doc.id;
@@ -299,9 +311,70 @@ export class DocumentLinksService {
     return {
       documentId: doc.id,
       balanceSummary,
+      sourceImputationSummary,
       links: formattedLinks,
       suggestions: suggestions.slice(0, 12),
     };
+  }
+
+  /**
+   * Enriquece un listado paginado de documentos con conteo de vínculos,
+   * resumen de saldo pendiente y saldo disponible por imputar.
+   */
+  async enrichDocumentsWithBalances(companyId: number, docs: Document[]) {
+    if (!docs || docs.length === 0) return [];
+    const docIds = docs.map((d) => d.id);
+    const links = await this.documentLinkModel.findAll({
+      where: {
+        companyId,
+        [Op.or]: [{ sourceDocumentId: docIds }, { targetDocumentId: docIds }],
+      },
+      include: [{ model: Document, as: 'sourceDocument', attributes: ['id', 'totalAmount'] }],
+    });
+
+    const linksByDocId = new Map<number, any[]>();
+    for (const lnk of links) {
+      const plain = typeof (lnk as any).toJSON === 'function' ? (lnk as any).toJSON() : lnk;
+      const srcList = linksByDocId.get(plain.sourceDocumentId) || [];
+      srcList.push(plain);
+      linksByDocId.set(plain.sourceDocumentId, srcList);
+
+      if (plain.targetDocumentId !== plain.sourceDocumentId) {
+        const tgtList = linksByDocId.get(plain.targetDocumentId) || [];
+        tgtList.push(plain);
+        linksByDocId.set(plain.targetDocumentId, tgtList);
+      }
+    }
+
+    return docs.map((doc) => {
+      const plainDoc = typeof (doc as any).toJSON === 'function' ? (doc as any).toJSON() : { ...doc };
+      const docLinks = linksByDocId.get(doc.id) || [];
+      const linkInputs = docLinks.map((l) => ({
+        sourceDocumentId: l.sourceDocumentId,
+        targetDocumentId: l.targetDocumentId,
+        linkType: l.linkType,
+        appliedAmount: l.appliedAmount,
+        sourceTotalAmount: l.sourceDocument?.totalAmount,
+      }));
+
+      return {
+        ...plainDoc,
+        linkedCount: docLinks.length,
+        balanceSummary: computeDocumentBalanceSummary({
+          documentId: doc.id,
+          documentType: doc.documentType,
+          totalAmount: doc.totalAmount,
+          currentPaymentStatus: doc.paymentStatus,
+          links: linkInputs,
+        }),
+        imputationSummary: computeSourceImputationSummary({
+          documentId: doc.id,
+          documentType: doc.documentType,
+          totalAmount: doc.totalAmount,
+          links: linkInputs,
+        }),
+      };
+    });
   }
 
   /**

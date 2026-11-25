@@ -1,6 +1,9 @@
 import { DocumentPaymentStatus } from '../document.model';
 import { DocumentLinkType } from '../models/document-link.model';
-import { computeDocumentBalanceSummary } from './document-balance.helper';
+import {
+  computeDocumentBalanceSummary,
+  computeSourceImputationSummary,
+} from './document-balance.helper';
 
 describe('document-balance.helper', () => {
   it('calcula PARTIALLY_PAID cuando hay un pago parcial sobre una factura', () => {
@@ -93,5 +96,25 @@ describe('document-balance.helper', () => {
 
     expect(summary.isTrackable).toBe(false);
     expect(summary.derivedPaymentStatus).toBe(DocumentPaymentStatus.NOT_APPLICABLE);
+  });
+
+  it('calcula cuánto falta imputar en un recibo con imputaciones parciales', () => {
+    const imp = computeSourceImputationSummary({
+      documentId: 20,
+      documentType: 'recibo',
+      totalAmount: 100000,
+      links: [
+        {
+          sourceDocumentId: 20,
+          targetDocumentId: 10,
+          linkType: DocumentLinkType.PAYMENT_IMPUTATION,
+          appliedAmount: 35000,
+        },
+      ],
+    });
+
+    expect(imp.isPaymentSource).toBe(true);
+    expect(imp.imputedAmount).toBe(35000);
+    expect(imp.unappliedAmount).toBe(65000);
   });
 });

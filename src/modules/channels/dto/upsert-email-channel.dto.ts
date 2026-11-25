@@ -1,4 +1,5 @@
 import {
+  IsArray,
   IsBoolean,
   IsEmail,
   IsEnum,
@@ -9,7 +10,10 @@ import {
   Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { EmailProviderType } from '../models/company-email-channel.model';
+import {
+  EmailProviderType,
+  EmailSenderPolicy,
+} from '../models/company-email-channel.model';
 
 export class UpsertEmailChannelDto {
   @IsEnum(EmailProviderType)
@@ -57,4 +61,13 @@ export class UpsertEmailChannelDto {
   @Min(1)
   @Max(60)
   syncIntervalMinutes?: number;
+
+  @IsOptional()
+  @IsEnum(EmailSenderPolicy)
+  senderPolicy?: EmailSenderPolicy;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  allowedSenders?: string[];
 }

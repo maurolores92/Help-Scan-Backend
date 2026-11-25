@@ -16,6 +16,11 @@ export enum EmailProviderType {
   CUSTOM = 'CUSTOM',
 }
 
+export enum EmailSenderPolicy {
+  ALL = 'ALL',
+  WHITELIST = 'WHITELIST',
+}
+
 export enum EmailSyncStatus {
   IDLE = 'IDLE',
   OK = 'OK',
@@ -108,4 +113,20 @@ export class CompanyEmailChannel extends Model {
 
   @Column({ type: DataType.STRING(120), allowNull: true, field: 'webhook_secret' })
   declare webhookSecret: string | null;
+
+  @Column({
+    type: DataType.STRING(20),
+    allowNull: false,
+    defaultValue: EmailSenderPolicy.ALL,
+    field: 'sender_policy',
+  })
+  declare senderPolicy: EmailSenderPolicy;
+
+  @Column({
+    type: DataType.JSONB,
+    allowNull: false,
+    defaultValue: [],
+    field: 'allowed_senders',
+  })
+  declare allowedSenders: string[];
 }

@@ -15,6 +15,17 @@ export enum WhatsappSenderPolicy {
   WHITELIST = 'WHITELIST',
 }
 
+export enum WhatsappGroupPolicy {
+  IGNORE = 'IGNORE',
+  WHITELIST = 'WHITELIST',
+  ALL = 'ALL',
+}
+
+export interface AllowedWhatsappGroup {
+  jid: string;
+  name: string;
+}
+
 export enum WhatsappConnectionStatus {
   DISCONNECTED = 'DISCONNECTED',
   CONNECTING = 'CONNECTING',
@@ -104,6 +115,22 @@ export class CompanyWhatsappChannel extends Model {
     field: 'ignore_groups',
   })
   declare ignoreGroups: boolean;
+
+  @Column({
+    type: DataType.STRING(20),
+    allowNull: false,
+    defaultValue: WhatsappGroupPolicy.IGNORE,
+    field: 'group_policy',
+  })
+  declare groupPolicy: WhatsappGroupPolicy;
+
+  @Column({
+    type: DataType.JSONB,
+    allowNull: false,
+    defaultValue: [],
+    field: 'allowed_groups',
+  })
+  declare allowedGroups: AllowedWhatsappGroup[];
 
   @Column({
     type: DataType.BOOLEAN,

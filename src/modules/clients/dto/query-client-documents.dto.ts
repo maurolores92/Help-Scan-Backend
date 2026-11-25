@@ -16,6 +16,14 @@ export class QueryClientDocumentsDto {
 
   @IsOptional()
   @IsString()
+  paymentStatus?: string;
+
+  @IsOptional()
+  @IsIn(['all', 'linked', 'unlinked'])
+  linkState?: 'all' | 'linked' | 'unlinked';
+
+  @IsOptional()
+  @IsString()
   search?: string;
 
   @IsOptional()

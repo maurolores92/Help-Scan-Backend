@@ -10,8 +10,12 @@ export function unwrapWhatsappMessageContent(rawMessage: any): any {
       current = current.viewOnceMessage.message;
     } else if (current.viewOnceMessageV2?.message) {
       current = current.viewOnceMessageV2.message;
+    } else if (current.viewOnceMessageV2Extension?.message) {
+      current = current.viewOnceMessageV2Extension.message;
     } else if (current.documentWithCaptionMessage?.message) {
       current = current.documentWithCaptionMessage.message;
+    } else if (current.editedMessage?.message) {
+      current = current.editedMessage.message;
     } else {
       break;
     }

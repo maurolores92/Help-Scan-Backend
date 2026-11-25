@@ -69,6 +69,20 @@ export class WhatsappMessage extends Model {
   declare replyJid: string | null;
 
   @Column({
+    type: DataType.STRING(120),
+    allowNull: true,
+    field: 'group_jid',
+  })
+  declare groupJid: string | null;
+
+  @Column({
+    type: DataType.STRING(200),
+    allowNull: true,
+    field: 'group_name',
+  })
+  declare groupName: string | null;
+
+  @Column({
     type: DataType.STRING(200),
     allowNull: true,
     field: 'sender_name',

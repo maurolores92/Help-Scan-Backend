@@ -12,6 +12,69 @@ export interface DocumentBalanceLinkInput {
   sourceTotalAmount?: number | string | null;
 }
 
+export interface SourceImputationSummary {
+  isPaymentSource: boolean;
+  totalAmount: number;
+  imputedAmount: number;
+  unappliedAmount: number;
+}
+
+const PAYMENT_IMPUTING_BUCKETS = new Set([
+  'recibo',
+  'orden_pago',
+  'transferencia_pago',
+  'certificado_retencion',
+  'nota_credito',
+]);
+
+export function isPaymentSourceType(documentType?: string | null): boolean {
+  return PAYMENT_IMPUTING_BUCKETS.has(normalizeDocumentTypeBucket(documentType));
+}
+
+/**
+ * Calcula cuánto de un recibo, orden de pago, transferencia, retención o NC
+ * ya fue imputado a comprobantes destino y cuánto queda disponible por aplicar.
+ */
+export function computeSourceImputationSummary(params: {
+  documentId: number;
+  documentType?: string | null;
+  totalAmount?: number | string | null;
+  links: DocumentBalanceLinkInput[];
+}): SourceImputationSummary {
+  const isPaymentSource = isPaymentSourceType(params.documentType);
+  const totalAmount = roundMoney(Math.max(0, toNumericAmount(params.totalAmount)));
+  if (!isPaymentSource) {
+    return {
+      isPaymentSource: false,
+      totalAmount,
+      imputedAmount: 0,
+      unappliedAmount: 0,
+    };
+  }
+
+  let imputedAmount = 0;
+  for (const link of params.links) {
+    if (Number(link.sourceDocumentId) !== Number(params.documentId)) continue;
+    if (
+      link.linkType === DocumentLinkType.PAYMENT_IMPUTATION ||
+      link.linkType === DocumentLinkType.CREDIT_NOTE_ADJUSTMENT
+    ) {
+      const amt = toNumericAmount(link.appliedAmount);
+      if (amt > 0) imputedAmount += amt;
+    }
+  }
+
+  imputedAmount = roundMoney(imputedAmount);
+  const unappliedAmount = roundMoney(Math.max(0, totalAmount - imputedAmount));
+
+  return {
+    isPaymentSource: true,
+    totalAmount,
+    imputedAmount,
+    unappliedAmount,
+  };
+}
+
 export interface DocumentBalanceSummary {
   isTrackable: boolean;
   totalAmount: number;
