@@ -10,6 +10,7 @@ import { FtpDevice, FtpDeviceStatus } from '../../ftp-devices/ftp-device.model';
 import {
   buildQuotaMetric,
   bytesToMegabytes,
+  calcStorageMbFromDocuments,
   CompanyQuotaSummary,
   getCurrentBillingPeriod,
   resolveCompanyEffectiveLimits,
@@ -125,12 +126,20 @@ export class CompanyQuotaSummaryService {
       const docStats = docStatsMap.get(company.id) ?? { count: 0, bytes: 0 };
       const aiStats = aiUsageMap.get(company.id) ?? { queries: 0, tokens: 0, docsProcessed: 0, pagesCount: 0 };
       const currentStorageMb = bytesToMegabytes(docStats.bytes);
+      const maxStoredFiles = limits.maxDocuments ?? limits.maxPages;
+      const effectiveStorageMax =
+        limits.maxStorageMb ?? calcStorageMbFromDocuments(maxStoredFiles);
 
-      const storageMetric = buildQuotaMetric(currentStorageMb, limits.maxStorageMb);
+      const storageMetric = buildQuotaMetric(currentStorageMb, effectiveStorageMax);
       const aiMetric = buildQuotaMetric(aiStats.queries, limits.maxAiQueriesMonthly);
+      const storedDocsMetric = buildQuotaMetric(docStats.count, maxStoredFiles);
       const pagesMetric = buildQuotaMetric(
         aiStats.pagesCount,
         limits.maxPages ?? limits.maxDocuments,
+      );
+      const unitPriceArs = Number(limits.pricePerProcessedDocumentArs || 0);
+      const additionalCostArs = Number(
+        (aiStats.docsProcessed * unitPriceArs).toFixed(2),
       );
 
       result.set(company.id, {
@@ -146,7 +155,7 @@ export class CompanyQuotaSummaryService {
         useCustomLimits: Boolean(company.useCustomLimits),
         users: buildQuotaMetric(activeUsers, limits.maxUsers),
         pages: pagesMetric,
-        documents: pagesMetric,
+        documents: storedDocsMetric,
         storageMb: { ...storageMetric, currentBytes: docStats.bytes },
         aiQueries: {
           ...aiMetric,
@@ -155,6 +164,13 @@ export class CompanyQuotaSummaryService {
           aiDocumentsProcessed: aiStats.docsProcessed,
         },
         totalPagesUploaded: company.totalPagesUploaded ?? 0,
+        totalDocumentsProcessed: company.totalDocumentsProcessed ?? 0,
+        processingBilling: {
+          period,
+          processedCount: aiStats.docsProcessed,
+          unitPriceArs,
+          additionalCostArs,
+        },
         activeDocumentsCount: docStats.count,
         activeFtpDevicesCount: ftpDeviceCountMap.get(company.id) ?? 0,
       });

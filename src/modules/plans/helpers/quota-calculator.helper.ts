@@ -21,6 +21,14 @@ export interface EffectiveCompanyLimits {
   maxDocuments: number | null;
   maxStorageMb: number | null;
   maxAiQueriesMonthly: number | null;
+  pricePerProcessedDocumentArs: number;
+}
+
+export interface DocumentProcessingBillingSummary {
+  period: string;
+  processedCount: number;
+  unitPriceArs: number;
+  additionalCostArs: number;
 }
 
 export interface CompanyQuotaSummary {
@@ -38,11 +46,26 @@ export interface CompanyQuotaSummary {
   storageMb: StorageQuotaMetricItem;
   aiQueries: AiQuotaMetricItem;
   totalPagesUploaded?: number;
+  totalDocumentsProcessed?: number;
+  processingBilling?: DocumentProcessingBillingSummary;
   activeDocumentsCount?: number;
   activeFtpDevicesCount?: number;
 }
 
 const BYTES_PER_MB = 1024 * 1024;
+
+/**
+ * Calcula la cuota de storage en MB (base binaria: 1000 archivos ≈ 1024 MB = 1 GB)
+ * a partir del límite máximo de archivos almacenados.
+ */
+export const calcStorageMbFromDocuments = (
+  maxDocuments: number | null | undefined,
+): number | null => {
+  if (maxDocuments === null || maxDocuments === undefined || maxDocuments <= 0) {
+    return null;
+  }
+  return Math.max(1, Math.round((Number(maxDocuments) / 1000) * 1024));
+};
 
 /**
  * Retorna el período mensual actual en formato 'YYYY-MM'.
@@ -125,55 +148,66 @@ export const resolveCompanyEffectiveLimits = (company: {
     maxDocuments: number | null;
     maxStorageMb: number | null;
     maxAiQueriesMonthly: number | null;
+    pricePerProcessedDocumentArs?: number | null;
   } | null;
 }): EffectiveCompanyLimits => {
   const hasPlan = Boolean(company.plan);
   const useCustom = Boolean(company.useCustomLimits) || !hasPlan;
+  const pricePerProcessedDocumentArs = Number(
+    company.plan?.pricePerProcessedDocumentArs || 0,
+  );
 
   if (!useCustom && company.plan) {
-    const planPages = normalizeNullableLimit(
-      company.plan.maxPages ?? company.plan.maxDocuments,
+    const planDocs = normalizeNullableLimit(
+      company.plan.maxDocuments ?? company.plan.maxPages,
       true,
     );
+    const planStorageMb =
+      normalizeNullableLimit(company.plan.maxStorageMb, true) ??
+      calcStorageMbFromDocuments(planDocs);
 
     return {
       maxUsers: normalizeNullableLimit(company.plan.maxUsers, true),
-      maxPages: planPages,
-      maxDocuments: planPages,
-      maxStorageMb: normalizeNullableLimit(company.plan.maxStorageMb, true),
+      maxPages: planDocs,
+      maxDocuments: planDocs,
+      maxStorageMb: planStorageMb,
       maxAiQueriesMonthly: normalizeNullableLimit(
         company.plan.maxAiQueriesMonthly,
         false,
       ),
+      pricePerProcessedDocumentArs,
     };
   }
 
   const fallbackPlan = company.plan;
-  const customPages =
-    company.maxPages !== undefined
-      ? normalizeNullableLimit(company.maxPages, true)
-      : company.maxDocuments !== undefined
-        ? normalizeNullableLimit(company.maxDocuments, true)
+  const customDocs =
+    company.maxDocuments !== undefined
+      ? normalizeNullableLimit(company.maxDocuments, true)
+      : company.maxPages !== undefined
+        ? normalizeNullableLimit(company.maxPages, true)
         : normalizeNullableLimit(
-            fallbackPlan?.maxPages ?? fallbackPlan?.maxDocuments,
+            fallbackPlan?.maxDocuments ?? fallbackPlan?.maxPages,
             true,
           );
+
+  const customStorageMb =
+    company.maxStorageMb !== undefined
+      ? normalizeNullableLimit(company.maxStorageMb, true)
+      : normalizeNullableLimit(fallbackPlan?.maxStorageMb, true);
 
   return {
     maxUsers:
       company.maxUsers !== undefined
         ? normalizeNullableLimit(company.maxUsers, true)
         : normalizeNullableLimit(fallbackPlan?.maxUsers, true),
-    maxPages: customPages,
-    maxDocuments: customPages,
-    maxStorageMb:
-      company.maxStorageMb !== undefined
-        ? normalizeNullableLimit(company.maxStorageMb, true)
-        : normalizeNullableLimit(fallbackPlan?.maxStorageMb, true),
+    maxPages: customDocs,
+    maxDocuments: customDocs,
+    maxStorageMb: customStorageMb ?? calcStorageMbFromDocuments(customDocs),
     maxAiQueriesMonthly:
       company.maxAiQueriesMonthly !== undefined
         ? normalizeNullableLimit(company.maxAiQueriesMonthly, false)
         : normalizeNullableLimit(fallbackPlan?.maxAiQueriesMonthly, false),
+    pricePerProcessedDocumentArs,
   };
 };
 

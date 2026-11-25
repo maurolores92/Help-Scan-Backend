@@ -5,6 +5,7 @@ export interface JwtPayload {
   username?: string;
   companyId?: number | null;
   role?: string;
+  sessionId?: string;
   iat?: number;
   exp?: number;
 }

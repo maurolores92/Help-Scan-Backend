@@ -87,6 +87,13 @@ export class PlansController {
           storageMb: { current: 0, max: null, unlimited: true, percentage: 0, currentBytes: 0 },
           aiQueries: { current: 0, max: null, unlimited: true, percentage: 0, period: '', tokensUsed: 0, aiDocumentsProcessed: 0 },
           totalPagesUploaded: 0,
+          totalDocumentsProcessed: 0,
+          processingBilling: {
+            period: '',
+            processedCount: 0,
+            unitPriceArs: 0,
+            additionalCostArs: 0,
+          },
           activeDocumentsCount: 0,
           activeFtpDevicesCount: 0,
         };

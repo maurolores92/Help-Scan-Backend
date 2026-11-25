@@ -222,10 +222,14 @@ describe('TenantQuotasService', () => {
       { aiDocumentsProcessed: 1, tokensUsed: 840 },
       expect.any(Object),
     );
+    expect(companyModelMock.increment).toHaveBeenCalledWith(
+      { totalDocumentsProcessed: 1 },
+      expect.objectContaining({ where: { id: 20 } }),
+    );
     expect(result).toBe(usageRecordMock);
   });
 
-  it('debe bloquear la subida si se supera el cupo de hojas/páginas acumuladas del período', async () => {
+  it('debe bloquear la subida si se supera el límite de archivos almacenados en bóveda', async () => {
     // Arrange
     companyModelMock.findByPk.mockResolvedValueOnce({
       id: 30,
@@ -237,17 +241,65 @@ describe('TenantQuotasService', () => {
         maxPages: 100,
         maxDocuments: 100,
         maxStorageMb: 2048,
-        maxAiQueriesMonthly: 100,
+        maxAiQueriesMonthly: null,
       },
     });
-    monthlyUsageModelMock.findOne.mockResolvedValueOnce({ pagesCount: 98 });
+    documentModelMock.findAll.mockResolvedValueOnce([
+      { docsCount: 100, totalBytes: 50 * 1024 * 1024 },
+    ]);
 
-    // Act & Assert (intentar subir un documento de 5 páginas cuando quedan solo 2)
+    // Act & Assert (intentar subir un archivo cuando ya hay 100 almacenados)
     await expect(
       service.assertCanStoreDocument(30, 1024, 5),
     ).rejects.toThrow(BadRequestException);
     expect(notificationsServiceMock.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'company.quota_exceeded', companyId: 30 }),
+    );
+  });
+
+  it('calcula resumen de archivos almacenados y facturación adicional en ARS por documento procesado', async () => {
+    companyModelMock.findByPk.mockResolvedValueOnce({
+      id: 40,
+      name: 'Facturadora S.A.',
+      status: CompanyStatus.ACTIVE,
+      useCustomLimits: false,
+      totalDocumentsProcessed: 25,
+      plan: {
+        id: 2,
+        name: 'Pro',
+        slug: 'pro',
+        badgeColor: 'primary',
+        maxUsers: 10,
+        maxDocuments: 1000,
+        maxStorageMb: 1024,
+        maxAiQueriesMonthly: null,
+        pricePerProcessedDocumentArs: 150,
+      },
+    });
+    userModelMock.findAll.mockResolvedValueOnce([{ companyId: 40, activeCount: 3 }]);
+    documentModelMock.findAll.mockResolvedValueOnce([
+      { companyId: 40, docsCount: 120, totalBytes: 128 * 1024 * 1024 },
+    ]);
+    monthlyUsageModelMock.findAll.mockResolvedValueOnce([
+      { companyId: 40, aiQueriesCount: 0, tokensUsed: 5000, aiDocumentsProcessed: 18, pagesCount: 30 },
+    ]);
+
+    const summary = await service.getCompanyQuotaSummary(40);
+
+    expect(summary.documents).toEqual({
+      current: 120,
+      max: 1000,
+      unlimited: false,
+      percentage: 12,
+    });
+    expect(summary.storageMb.max).toBe(1024);
+    expect(summary.totalDocumentsProcessed).toBe(25);
+    expect(summary.processingBilling).toEqual(
+      expect.objectContaining({
+        processedCount: 18,
+        unitPriceArs: 150,
+        additionalCostArs: 2700,
+      }),
     );
   });
 

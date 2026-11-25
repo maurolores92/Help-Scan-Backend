@@ -15,6 +15,7 @@ import { Company } from '../companies/company.model';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/audit.model';
 import { ExchangeRateService, PlanPublicWithExchangeRate } from './services/exchange-rate.service';
+import { calcStorageMbFromDocuments } from './helpers/quota-calculator.helper';
 
 import { defaultPlansData } from '../seeders/data/plans.data';
 
@@ -52,10 +53,12 @@ export class PlansService {
         'slug',
         'description',
         'priceMonthly',
+        'pricePerProcessedDocumentArs',
         'currency',
         'isTrial',
         'trialDays',
         'maxUsers',
+        'maxPages',
         'maxDocuments',
         'maxStorageMb',
         'maxAiQueriesMonthly',
@@ -102,18 +105,31 @@ export class PlansService {
         );
       }
 
+      const effectiveDocs =
+        dto.maxDocuments !== undefined
+          ? dto.maxDocuments
+          : dto.maxPages !== undefined
+            ? dto.maxPages
+            : 1000;
+      const effectiveStorageMb =
+        effectiveDocs !== null
+          ? calcStorageMbFromDocuments(effectiveDocs)
+          : null;
+
       const plan = await this.planModel.create(
         {
           name: dto.name.trim(),
           slug,
           description: dto.description ?? null,
           priceMonthly: dto.priceMonthly ?? 0,
+          pricePerProcessedDocumentArs: Number(dto.pricePerProcessedDocumentArs ?? 0),
           currency: dto.currency || 'USD',
           maxUsers: dto.maxUsers !== undefined ? dto.maxUsers : 10,
-          maxDocuments: dto.maxDocuments !== undefined ? dto.maxDocuments : 1000,
-          maxStorageMb: dto.maxStorageMb !== undefined ? dto.maxStorageMb : 5120,
+          maxPages: effectiveDocs,
+          maxDocuments: effectiveDocs,
+          maxStorageMb: effectiveStorageMb,
           maxAiQueriesMonthly:
-            dto.maxAiQueriesMonthly !== undefined ? dto.maxAiQueriesMonthly : 500,
+            dto.maxAiQueriesMonthly !== undefined ? dto.maxAiQueriesMonthly : null,
           includedModules:
             dto.includedModules && dto.includedModules.length > 0
               ? dto.includedModules
@@ -273,11 +289,33 @@ export class PlansService {
         );
       }
 
+      const docsProvided =
+        dto.maxDocuments !== undefined || dto.maxPages !== undefined;
+      const resolvedDocs =
+        dto.maxDocuments !== undefined
+          ? dto.maxDocuments
+          : dto.maxPages !== undefined
+            ? dto.maxPages
+            : plan.maxDocuments;
+
       await plan.update(
         {
           ...dto,
           ...(dto.name ? { name: dto.name.trim() } : {}),
           ...(dto.slug ? { slug: dto.slug.toLowerCase().trim() } : {}),
+          ...(dto.pricePerProcessedDocumentArs !== undefined
+            ? { pricePerProcessedDocumentArs: Number(dto.pricePerProcessedDocumentArs) }
+            : {}),
+          ...(docsProvided
+            ? {
+                maxDocuments: resolvedDocs,
+                maxPages: resolvedDocs,
+                maxStorageMb:
+                  resolvedDocs !== null
+                    ? calcStorageMbFromDocuments(resolvedDocs)
+                    : null,
+              }
+            : {}),
         },
         { transaction },
       );

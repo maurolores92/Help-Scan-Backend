@@ -181,6 +181,17 @@ export class Company extends Model {
   declare totalPagesUploaded: number;
 
   /**
+   * Contador acumulativo total de documentos procesados históricamente (odómetro para facturación adicional, nunca disminuye al borrar archivos).
+   */
+  @Column({
+    type: DataType.INTEGER,
+    allowNull: false,
+    defaultValue: 0,
+    field: 'total_documents_processed',
+  })
+  declare totalDocumentsProcessed: number;
+
+  /**
    * Override de almacenamiento físico máximo en MB (`null` = ilimitado / heredado del plan).
    */
   @Column({

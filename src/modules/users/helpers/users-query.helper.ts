@@ -115,6 +115,7 @@ export function mapUserWithMergedPermissions(
     roleId: user.roleId,
     image: (user as any).image || null,
     document: user.document || null,
+    activeSessionId: user.activeSessionId || null,
     permissions: mergedPermissions,
   };
 }

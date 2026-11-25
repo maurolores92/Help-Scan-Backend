@@ -17,6 +17,7 @@ import { AuditAction } from '../../audit/audit.model';
 import { CompanyQuotaSummaryService } from './company-quota-summary.service';
 import {
   bytesToMegabytes,
+  calcStorageMbFromDocuments,
   CompanyQuotaSummary,
   getCurrentBillingPeriod,
   resolveCompanyEffectiveLimits,
@@ -73,8 +74,9 @@ export class TenantQuotasService {
   }
 
   /**
-   * Evalúa si es posible almacenar un nuevo archivo PDF según cantidad máxima de hojas/páginas y espacio en MB.
-   * El contador de hojas es estrictamente acumulativo y nunca disminuye al borrar archivos.
+   * Evalúa si es posible almacenar un nuevo archivo PDF según cantidad máxima de archivos
+   * actualmente almacenados en bóveda y espacio físico en MB (base binaria: 1000 archivos ≈ 1 GB).
+   * Al eliminar archivos se libera el cupo de almacenamiento; el contador de documentos procesados nunca se resta.
    */
   async checkDocumentQuota(
     companyId: number,
@@ -85,51 +87,57 @@ export class TenantQuotasService {
     const company = await this.loadActiveCompanyWithPlan(companyId, transaction);
     const limits = resolveCompanyEffectiveLimits(company);
 
-    // Verificación de cuota de hojas / páginas acumuladas en el período mensual
-    const period = getCurrentBillingPeriod();
-    const usage = await this.monthlyUsageModel.findOne({
-      where: { companyId, period },
-      transaction,
-    });
-    const currentPages = Number(usage?.pagesCount || 0);
-    const maxPages = limits.maxPages ?? limits.maxDocuments;
-
-    if (maxPages !== null && currentPages + incomingPages > maxPages) {
-      return {
-        allowed: false,
-        reason: `Se alcanzó el límite mensual de hojas/páginas permitidas en su plan (${currentPages} de ${maxPages} hojas contabilizadas en ${period}). Eliminar archivos no repone el contador de hojas ya escaneadas.`,
-      };
-    }
-
-    // Verificación de almacenamiento físico en disco (MB)
+    // Verificación de archivos almacenados y almacenamiento físico en disco (MB)
     const [aggregate] = (await this.documentModel.findAll({
       attributes: [
+        [fn('COUNT', col('id')), 'docsCount'],
         [fn('COALESCE', fn('SUM', col('file_size')), 0), 'totalBytes'],
       ],
       where: { companyId },
       raw: true,
       transaction,
-    })) as unknown as Array<{ totalBytes: string | number }>;
+    })) as unknown as Array<{
+      docsCount?: string | number;
+      totalBytes?: string | number;
+    }>;
 
-    const currentBytes = Number(aggregate?.totalBytes || 0);
-    const projectedMb = bytesToMegabytes(currentBytes + incomingFileSizeBytes);
-    if (limits.maxStorageMb !== null && projectedMb > limits.maxStorageMb) {
+    const currentStoredFiles = Number(aggregate?.docsCount || 0);
+    const maxStoredFiles = limits.maxDocuments ?? limits.maxPages;
+
+    if (maxStoredFiles !== null && currentStoredFiles + 1 > maxStoredFiles) {
       return {
         allowed: false,
-        reason: `El archivo supera la cuota de almacenamiento disponible de su plan (${bytesToMegabytes(currentBytes)} MB usados de ${limits.maxStorageMb} MB).`,
+        reason: `Se alcanzó el límite de archivos almacenados en su plan (${currentStoredFiles} de ${maxStoredFiles} archivos). Eliminá archivos anteriores o actualizá tu plan para liberar espacio.`,
       };
     }
 
-    if (maxPages !== null) {
+    const currentBytes = Number(aggregate?.totalBytes || 0);
+    const projectedMb = bytesToMegabytes(currentBytes + incomingFileSizeBytes);
+    const effectiveStorageMb =
+      limits.maxStorageMb ?? calcStorageMbFromDocuments(maxStoredFiles);
+
+    if (effectiveStorageMb !== null && projectedMb > effectiveStorageMb) {
+      return {
+        allowed: false,
+        reason: `El archivo supera la cuota de almacenamiento disponible de su plan (${bytesToMegabytes(currentBytes)} MB usados de ${effectiveStorageMb} MB).`,
+      };
+    }
+
+    if (maxStoredFiles !== null) {
       await this.emitWarningIfNearThreshold(
         companyId,
-        'hojas / páginas',
-        currentPages + incomingPages,
-        maxPages,
+        'archivos almacenados',
+        currentStoredFiles + 1,
+        maxStoredFiles,
       );
     }
-    if (limits.maxStorageMb !== null) {
-      await this.emitWarningIfNearThreshold(companyId, 'almacenamiento (MB)', projectedMb, limits.maxStorageMb);
+    if (effectiveStorageMb !== null) {
+      await this.emitWarningIfNearThreshold(
+        companyId,
+        'almacenamiento (MB)',
+        projectedMb,
+        effectiveStorageMb,
+      );
     }
 
     return { allowed: true };
@@ -289,6 +297,11 @@ export class TenantQuotasService {
       await usage.increment(
         { aiDocumentsProcessed: 1, tokensUsed: options.tokensUsed ?? 0 },
         { transaction },
+      );
+
+      await this.companyModel.increment(
+        { totalDocumentsProcessed: 1 },
+        { where: { id: companyId }, transaction },
       );
 
       await usage.reload({ transaction });

@@ -91,6 +91,14 @@ export const buildCompanyCreationAttributes = (
   assignedPlan: Plan | null,
 ) => {
   const useCustom = Boolean(dto.useCustomLimits);
+  const customDocs = useCustom ? (dto.maxDocuments ?? dto.maxPages ?? null) : null;
+  const customStorageMb =
+    useCustom && customDocs !== null && Number(customDocs) > 0
+      ? Math.max(1, Math.round((Number(customDocs) / 1000) * 1024))
+      : useCustom
+        ? (dto.maxStorageMb ?? null)
+        : null;
+
   return {
     ...dto,
     slug,
@@ -100,9 +108,9 @@ export const buildCompanyCreationAttributes = (
     maxUsers: useCustom
       ? (dto.maxUsers !== undefined ? dto.maxUsers : (assignedPlan?.maxUsers ?? 10))
       : (dto.maxUsers ?? assignedPlan?.maxUsers ?? 10),
-    maxPages: useCustom ? (dto.maxPages ?? dto.maxDocuments ?? null) : null,
-    maxDocuments: useCustom ? (dto.maxDocuments ?? dto.maxPages ?? null) : null,
-    maxStorageMb: useCustom ? (dto.maxStorageMb ?? null) : null,
+    maxPages: customDocs,
+    maxDocuments: customDocs,
+    maxStorageMb: customStorageMb,
     maxAiQueriesMonthly: useCustom ? (dto.maxAiQueriesMonthly ?? null) : null,
     enabledModules:
       dto.enabledModules && dto.enabledModules.length > 0

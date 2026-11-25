@@ -40,6 +40,12 @@ export class CreatePlanDto {
   priceMonthly?: number;
 
   @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0, { message: 'El precio por documento procesado no puede ser negativo' })
+  pricePerProcessedDocumentArs?: number;
+
+  @IsOptional()
   @IsString()
   @IsIn(['ARS', 'USD'], { message: 'La moneda debe ser ARS o USD' })
   currency?: 'ARS' | 'USD';

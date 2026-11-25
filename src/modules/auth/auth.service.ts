@@ -1,8 +1,10 @@
 import {
   BadRequestException,
   Injectable,
+  Optional,
   UnauthorizedException,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { UsersService } from '../users/users.service';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -14,6 +16,7 @@ import { Company, CompanyStatus } from '../companies/company.model';
 import { Plan } from '../plans/plan.model';
 import { Permission } from '../permissions/permission.model';
 import { Users, UserStatus } from '../users/users.model';
+import { NotificationsGateway } from '../notifications/notifications.gateway';
 import { ensureTenantDirectories } from '../../common/utils/storage-path.util';
 
 @Injectable()
@@ -21,6 +24,7 @@ export class AuthService {
   constructor(
     private usersService: UsersService,
     private jwtService: JwtService,
+    @Optional() private readonly notificationsGateway?: NotificationsGateway,
   ) {}
 
   async signIn(data: SignInAuthDto): Promise<any> {
@@ -79,11 +83,17 @@ export class AuthService {
       throw new UnauthorizedException('Contraseña incorrecta');
     }
 
-    // Actualizar timestamp de último login
+    // Generar sesión única: invalida cualquier sesión previa (incluye superadmin)
+    const sessionId = randomUUID();
     const userInstance = await Users.findByPk(user.id);
     if (userInstance) {
-      await userInstance.update({ lastLoginAt: new Date() });
+      await userInstance.update({
+        lastLoginAt: new Date(),
+        activeSessionId: sessionId,
+      });
     }
+
+    this.notificationsGateway?.emitSessionReplaced?.(user.id, sessionId);
 
     const payload = {
       id: user.id,
@@ -93,6 +103,7 @@ export class AuthService {
       username: user.username,
       companyId: user.companyId ?? null,
       role: user.role,
+      sessionId,
     };
 
     const accessToken = this.jwtService.sign(payload, { expiresIn: '24h' });
@@ -134,6 +145,7 @@ export class AuthService {
       throw new BadRequestException('El rol para nuevos registros no existe en el sistema');
     }
 
+    const sessionId = randomUUID();
     const newUser = await Users.create({
       name: createUserDto.name,
       lastName: createUserDto.lastName,
@@ -145,6 +157,7 @@ export class AuthService {
       roleId: userRole.id,
       isAdmin: true,
       status: 'ACTIVE',
+      activeSessionId: sessionId,
     } as any);
 
     const payload = {
@@ -154,6 +167,7 @@ export class AuthService {
       username: newUser.username,
       companyId: newUser.companyId,
       role: userRole.slug,
+      sessionId,
     };
 
     const accessToken = this.jwtService.sign(payload, { expiresIn: '24h' });
@@ -215,6 +229,12 @@ export class AuthService {
       if (user.status === 'INACTIVE' || user.status === 'SUSPENDED') {
         throw new UnauthorizedException(
           'La cuenta se encuentra inactiva o suspendida',
+        );
+      }
+
+      if (user.activeSessionId && decoded.sessionId !== user.activeSessionId) {
+        throw new UnauthorizedException(
+          'SESSION_REPLACED: Tu sesión fue cerrada porque se inició sesión desde otro dispositivo.',
         );
       }
 
@@ -335,6 +355,7 @@ export class AuthService {
     const name = fullNameParts[0] || 'Admin';
     const lastName = fullNameParts.slice(1).join(' ') || dto.companyName;
 
+    const sessionId = randomUUID();
     const newUser = await Users.create({
       name,
       lastName,
@@ -346,6 +367,7 @@ export class AuthService {
       roleId: userRole.id,
       isAdmin: true,
       status: UserStatus.ACTIVE,
+      activeSessionId: sessionId,
     } as any);
 
     // 7. Generar token de sesión
@@ -356,6 +378,7 @@ export class AuthService {
       username: newUser.username,
       companyId: company.id,
       role: userRole.slug,
+      sessionId,
     };
     const accessToken = this.jwtService.sign(payload, { expiresIn: '24h' });
 

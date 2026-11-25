@@ -11,6 +11,7 @@ import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { resolveJwtSecret } from '../../config/env-resolver';
+import { Users } from '../users/users.model';
 
 @WebSocketGateway({
   cors: { origin: true, credentials: true },
@@ -52,10 +53,23 @@ export class NotificationsGateway
         return;
       }
 
+      const dbUser = await Users.findByPk(userId, {
+        attributes: ['id', 'activeSessionId'],
+      });
+      if (dbUser?.activeSessionId && payload.sessionId !== dbUser.activeSessionId) {
+        client.emit('session:revoked', {
+          activeSessionId: dbUser.activeSessionId,
+          message: 'Tu sesión fue cerrada porque se inició sesión desde otro dispositivo.',
+        });
+        client.disconnect();
+        return;
+      }
+
       // Room personal del usuario
       const userRoom = `user-${userId}`;
       client.join(userRoom);
       client.data.userId = userId;
+      client.data.sessionId = payload.sessionId || null;
 
       // Room de compañía si aplica
       if (payload.companyId) {
@@ -86,6 +100,15 @@ export class NotificationsGateway
       return;
     }
     this.server.to(`user-${userId}`).emit('notification', notification);
+  }
+
+  /** Notifica en vivo a sesiones previas del usuario que fueron cerradas por un nuevo login */
+  emitSessionReplaced(userId: number, activeSessionId: string): void {
+    if (!this.server) return;
+    this.server.to(`user-${userId}`).emit('session:revoked', {
+      activeSessionId,
+      message: 'Tu sesión fue cerrada porque se inició sesión desde otro dispositivo.',
+    });
   }
 
   /** Emite una notificación a toda una compañía */

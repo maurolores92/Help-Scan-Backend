@@ -6,6 +6,7 @@ import { PassportModule } from '@nestjs/passport';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { UsersModule } from '../users/users.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { resolveJwtSecret } from '../../config/env-resolver';
 
@@ -13,6 +14,7 @@ import { resolveJwtSecret } from '../../config/env-resolver';
   imports: [
     ConfigModule,
     UsersModule,
+    NotificationsModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [],

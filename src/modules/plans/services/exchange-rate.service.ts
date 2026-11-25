@@ -12,6 +12,7 @@ export interface PlanPublicWithExchangeRate {
   slug: string;
   description: string | null;
   priceMonthly: number; // Expresado en PESOS (ARS), calculado según cotización y redondeo
+  pricePerProcessedDocumentArs: number;
   currency: 'ARS';
   originalPrice: number;
   originalCurrency: 'ARS' | 'USD';
@@ -194,6 +195,7 @@ export class ExchangeRateService implements OnModuleInit {
       slug: plan.slug,
       description: plan.description,
       priceMonthly: finalPriceInPesos,
+      pricePerProcessedDocumentArs: Number(plan.pricePerProcessedDocumentArs || 0),
       currency: 'ARS',
       originalPrice: rawPrice,
       originalCurrency: planCurrency,

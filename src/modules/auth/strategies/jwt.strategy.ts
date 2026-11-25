@@ -22,8 +22,19 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       if (!user) {
         throw new UnauthorizedException('Usuario no encontrado');
       }
+      if (user.status === 'INACTIVE' || user.status === 'SUSPENDED') {
+        throw new UnauthorizedException('La cuenta se encuentra inactiva o suspendida');
+      }
+      if (user.activeSessionId && data.sessionId !== user.activeSessionId) {
+        throw new UnauthorizedException(
+          'SESSION_REPLACED: Tu sesión fue cerrada porque se inició sesión desde otro dispositivo.',
+        );
+      }
       return user;
     } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
       throw new UnauthorizedException('Usuario no válido o sesión expirada');
     }
   }

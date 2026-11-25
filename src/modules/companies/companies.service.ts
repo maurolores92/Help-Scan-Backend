@@ -252,6 +252,13 @@ export class CompaniesService {
         payloadDto.maxPages = payloadDto.maxDocuments;
       }
 
+      if (payloadDto.useCustomLimits === true && payloadDto.maxDocuments !== undefined) {
+        payloadDto.maxStorageMb =
+          payloadDto.maxDocuments !== null && Number(payloadDto.maxDocuments) > 0
+            ? Math.max(1, Math.round((Number(payloadDto.maxDocuments) / 1000) * 1024))
+            : null;
+      }
+
       if (dto.status === CompanyStatus.ACTIVE) {
         await this.activateCompanyUsersAndAdmin(id, transaction);
         if (

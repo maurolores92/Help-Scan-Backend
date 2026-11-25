@@ -56,6 +56,17 @@ export class Plan extends Model {
   })
   declare priceMonthly: number;
 
+  /**
+   * Precio adicional en pesos argentinos (ARS) por cada documento procesado.
+   */
+  @Column({
+    type: DataType.DECIMAL(10, 2),
+    allowNull: false,
+    defaultValue: 0,
+    field: 'price_per_processed_document_ars',
+  })
+  declare pricePerProcessedDocumentArs: number;
+
   @Column({
     type: DataType.STRING(10),
     allowNull: false,
@@ -114,23 +125,23 @@ export class Plan extends Model {
   declare maxDocuments: number | null;
 
   /**
-   * Límite máximo de almacenamiento físico en MB (`null` = ilimitado).
+   * Límite máximo de almacenamiento físico en MB en base binaria (1000 archivos ≈ 1024 MB = 1 GB; `null` = ilimitado).
    */
   @Column({
     type: DataType.INTEGER,
     allowNull: true,
-    defaultValue: 5120,
+    defaultValue: 1024,
     field: 'max_storage_mb',
   })
   declare maxStorageMb: number | null;
 
   /**
-   * Límite mensual de consultas a la IA (`null` = ilimitado).
+   * Límite mensual de consultas a la IA (`null` = ilimitado / deprecado en planes).
    */
   @Column({
     type: DataType.INTEGER,
     allowNull: true,
-    defaultValue: 500,
+    defaultValue: null,
     field: 'max_ai_queries_monthly',
   })
   declare maxAiQueriesMonthly: number | null;

@@ -87,10 +87,9 @@ describe('PlansService', () => {
       {
         name: 'Profesional',
         slug: 'pro',
+        pricePerProcessedDocumentArs: 150,
         maxUsers: 15,
-        maxDocuments: 5000,
-        maxStorageMb: 10240,
-        maxAiQueriesMonthly: 2000,
+        maxDocuments: 1000,
         isDefault: true,
       },
       1,
@@ -98,6 +97,16 @@ describe('PlansService', () => {
 
     // Assert
     expect(result).toEqual(createdPlan);
+    expect(planModelMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxDocuments: 1000,
+        maxPages: 1000,
+        maxStorageMb: 1024,
+        pricePerProcessedDocumentArs: 150,
+        maxAiQueriesMonthly: null,
+      }),
+      expect.any(Object),
+    );
     expect(planModelMock.update).toHaveBeenCalledWith(
       { isDefault: false },
       expect.objectContaining({ where: { isDefault: true } }),
