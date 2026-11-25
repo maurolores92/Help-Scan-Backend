@@ -1,0 +1,86 @@
+import {
+  buildArcaAmountsSection,
+  buildArcaPartiesSection,
+  DefaultDocumentFormSeed,
+} from './form-shared.constants';
+
+export const NOTA_DEBITO_FORM_SEED: DefaultDocumentFormSeed = {
+  code: 'nota_debito',
+  label: 'Nota de Débito (ARCA A/B/C/M/FCE)',
+  description:
+    'Comprobante fiscal ARCA para intereses por mora, gastos bancarios, cheques rechazados o cargos adicionales a favor del emisor.',
+  icon: 'tabler:file-plus',
+  displayOrder: 3,
+  version: 1,
+  matchAliases: [
+    'nota_debito',
+    'nota_de_debito',
+    'nota_debito_a',
+    'nota_debito_b',
+    'nota_debito_c',
+    'nota_debito_m',
+    'nota_debito_e',
+    'nde',
+    'nd',
+  ],
+  aiExtractionGuide:
+    'Extraer datos fiscales ARCA de Nota de Débito: letra (A/B/C/M/E), código ARCA (002,007,012,052,202,207,212), motivo del débito (Intereses por mora, Cheque rechazado, Diferencia de cambio, Gastos de envío), comprobante o cheque origen asociado, CAE/CAI, emisor, receptor e importes debitados.',
+  sectionsSchema: [
+    {
+      id: 'nd_header',
+      title: '1. Comprobante Nota de Débito ARCA',
+      icon: 'tabler:file-plus',
+      fields: [
+        {
+          key: 'fiscalSubtype',
+          target: 'custom',
+          label: 'Subtipo ARCA',
+          fieldType: 'select',
+          colSpan: 4,
+          defaultValue: 'Nota de Débito',
+          options: ['Nota de Débito', 'Nota de Débito Electrónica MiPyME (NDE)'],
+          aiAttrKeys: ['subtipo_fiscal', 'clase_comprobante'],
+        },
+        { key: 'documentLetter', target: 'core', label: 'Letra', fieldType: 'select', colSpan: 4, options: ['A', 'B', 'C', 'M', 'E'] },
+        { key: 'afipVoucherCode', target: 'custom', label: 'Código ARCA', fieldType: 'text', colSpan: 4, placeholder: 'Ej: 002, 007, 012, 202', aiAttrKeys: ['codigo_arca', 'codigo_afip', 'codigo_comprobante'] },
+        { key: 'pointOfSale', target: 'core', label: 'Punto de Venta', fieldType: 'text', colSpan: 4, placeholder: 'Ej: 00004' },
+        { key: 'documentNumber', target: 'core', label: 'N° Nota de Débito', fieldType: 'text', colSpan: 4, required: true, placeholder: 'Ej: 00004-00000089' },
+        { key: 'documentDate', target: 'core', label: 'Fecha de Emisión', fieldType: 'date', colSpan: 4, required: true },
+        { key: 'authorizationType', target: 'custom', label: 'Tipo Autorización', fieldType: 'select', colSpan: 3, defaultValue: 'CAE', options: ['CAE', 'CAEA', 'CAI'], aiAttrKeys: ['tipo_autorizacion'] },
+        { key: 'cae', target: 'core', label: 'N° CAE / CAI', fieldType: 'text', colSpan: 5, placeholder: '14 dígitos numéricos' },
+        { key: 'caeDueDate', target: 'core', label: 'Vto. CAE / CAI', fieldType: 'date', colSpan: 4 },
+        {
+          key: 'debitReason',
+          target: 'custom',
+          label: 'Motivo de la Nota de Débito',
+          fieldType: 'select',
+          colSpan: 4,
+          options: ['Intereses por Mora', 'Cheque / E-Cheq Rechazado y Gastos', 'Diferencia de Cotización / Cambio', 'Gastos de Flete / Envío', 'Ajuste de Facturación', 'Otro'],
+          aiAttrKeys: ['motivo_debito', 'motivo'],
+        },
+        {
+          key: 'associatedVoucherNumber',
+          target: 'custom',
+          label: 'Comprobante / Cheque Asociado',
+          fieldType: 'text',
+          colSpan: 4,
+          placeholder: 'Ej: FA 00004-00041980 / Cheque #4412',
+          aiAttrKeys: ['comprobante_asociado', 'factura_asociada'],
+        },
+        { key: 'dueDate', target: 'core', label: 'Vencimiento de Pago', fieldType: 'date', colSpan: 4 },
+      ],
+    },
+    buildArcaPartiesSection(),
+    buildArcaAmountsSection('Total Debitado'),
+    {
+      id: 'nd_items_notes',
+      title: '4. Conceptos Debitados y Observaciones',
+      icon: 'tabler:list-details',
+      fields: [
+        { key: 'items', target: 'core', label: 'Ítems / Cargos', fieldType: 'items_table', colSpan: 12 },
+        { key: 'summary', target: 'core', label: 'Resumen / Detalle', fieldType: 'textarea', colSpan: 6 },
+        { key: 'validationNotes', target: 'core', label: 'Notas Internas', fieldType: 'textarea', colSpan: 6 },
+      ],
+    },
+  ],
+};

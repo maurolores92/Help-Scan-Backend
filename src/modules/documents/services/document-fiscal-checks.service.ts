@@ -121,9 +121,18 @@ export class DocumentFiscalChecksService {
   }
 
   private normalizeDocTypeFamily(documentType?: string | null): string {
-    const clean = String(documentType || '').toLowerCase().trim();
+    const clean = String(documentType || '')
+      .toLowerCase()
+      .trim()
+      .replace(/[\s-]+/g, '_');
     if (!clean) return '';
-    if (clean.startsWith('factura')) return 'factura';
+    if (clean.includes('nota_cred') || clean === 'nc' || clean === 'nce') return 'nota_credito';
+    if (clean.includes('nota_deb') || clean === 'nd' || clean === 'nde') return 'nota_debito';
+    if (clean.includes('ticket') || clean.includes('tique')) return 'ticket_fiscal';
+    if (clean.startsWith('factura') || clean === 'fce') return 'factura';
+    if (clean.includes('orden_pago') || clean === 'op') return 'orden_pago';
+    if (clean.includes('retencion')) return 'certificado_retencion';
+    if (clean.includes('transferencia')) return 'transferencia_pago';
     return clean;
   }
 }

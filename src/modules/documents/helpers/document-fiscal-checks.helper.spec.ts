@@ -56,9 +56,13 @@ describe('document-fiscal-checks.helper', () => {
     expect(warnings[0].relatedDocumentId).toBe(42);
   });
 
-  it('asigna NOT_APPLICABLE por defecto solo a remitos y legajos', () => {
+  it('asigna NOT_APPLICABLE por defecto a remitos, legajos, notas de crédito, retenciones, transferencias y presupuestos', () => {
     expect(resolveDefaultPaymentStatus('remito')).toBe('NOT_APPLICABLE');
     expect(resolveDefaultPaymentStatus('legajo')).toBe('NOT_APPLICABLE');
+    expect(resolveDefaultPaymentStatus('nota_credito')).toBe('NOT_APPLICABLE');
+    expect(resolveDefaultPaymentStatus('certificado_retencion')).toBe('NOT_APPLICABLE');
+    expect(resolveDefaultPaymentStatus('transferencia_pago')).toBe('NOT_APPLICABLE');
+    expect(resolveDefaultPaymentStatus('presupuesto')).toBe('NOT_APPLICABLE');
     expect(resolveDefaultPaymentStatus('factura_a')).toBe('PENDING');
   });
 });

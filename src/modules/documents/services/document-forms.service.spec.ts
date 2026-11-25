@@ -35,18 +35,59 @@ describe('DocumentFormsService', () => {
     return { service, formModel, recordModel, mockForms };
   };
 
-  it('resuelve variantes ARCA hacia el esquema unificado de factura e infiere letra/subtipo', async () => {
+  it('separa Nota de Crédito, Nota de Débito, Orden de Pago, Retenciones, Ticket y Transferencia de Factura/Recibo', async () => {
     const { service } = buildService();
 
-    const schemaNc = await service.resolveFormByDocumentType(1, 'nota_credito');
-    expect(schemaNc?.code).toBe('factura');
+    const schemaNc = await service.resolveFormByDocumentType(1, 'nota_credito_a');
+    expect(schemaNc?.code).toBe('nota_credito');
+
+    const schemaNd = await service.resolveFormByDocumentType(1, 'nota_debito_b');
+    expect(schemaNd?.code).toBe('nota_debito');
+
+    const schemaOp = await service.resolveFormByDocumentType(1, 'orden_pago');
+    expect(schemaOp?.code).toBe('orden_pago');
+
+    const schemaRet = await service.resolveFormByDocumentType(1, 'certificado_retencion');
+    expect(schemaRet?.code).toBe('certificado_retencion');
+
+    const schemaTk = await service.resolveFormByDocumentType(1, 'ticket_fiscal');
+    expect(schemaTk?.code).toBe('ticket_fiscal');
+
+    const schemaTr = await service.resolveFormByDocumentType(1, 'transferencia_pago');
+    expect(schemaTr?.code).toBe('transferencia_pago');
 
     const schemaFa = await service.resolveFormByDocumentType(1, 'factura_a');
     expect(schemaFa?.code).toBe('factura');
 
-    const hintsNc = service.inferCoreAndCustomHintsFromRawType('nota_credito_a', 'factura', null);
+    const hintsNc = service.inferCoreAndCustomHintsFromRawType('nota_credito_a', 'nota_credito', null);
     expect(hintsNc.documentLetter).toBe('A');
     expect(hintsNc.customDefaults.fiscalSubtype).toBe('Nota de Crédito');
+  });
+
+  it('mapea múltiples facturas imputadas (vouchers_table) dentro de Recibos y Órdenes de Pago', async () => {
+    const { service } = buildService();
+    const reciboSchema = await service.resolveFormByDocumentType(1, 'recibo_x');
+
+    const formData = service.buildFormDataFromExtraction(
+      reciboSchema,
+      {
+        attributes: {
+          banco: 'Banco Galicia',
+          retenciones: '4500',
+          comprobantes_imputados: [
+            { voucherType: 'Factura A', voucherNumber: '00004-00001200', originalAmount: 100000, appliedAmount: 100000 },
+            { voucherType: 'Factura A', voucherNumber: '00004-00001205', originalAmount: 50000, appliedAmount: 25000 },
+          ],
+        },
+      },
+      'recibo_x',
+    );
+
+    expect(formData.bankOrPlatform).toBe('Banco Galicia');
+    expect(formData.retentionsAmount).toBe(4500);
+    expect(Array.isArray(formData.appliedVouchers)).toBe(true);
+    expect(formData.appliedVouchers).toHaveLength(2);
+    expect(formData.appliedVouchers[1].appliedAmount).toBe(25000);
   });
 
   it('mapea atributos ARCA extraídos hacia formData del esquema correspondiente', async () => {

@@ -34,6 +34,7 @@ export enum DocumentStatus {
 
 export enum DocumentPaymentStatus {
   PENDING = 'PENDING',
+  PARTIALLY_PAID = 'PARTIALLY_PAID',
   SCHEDULED = 'SCHEDULED',
   PAID = 'PAID',
   NOT_APPLICABLE = 'NOT_APPLICABLE',

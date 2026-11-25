@@ -16,7 +16,8 @@ export type DocumentFormFieldType =
   | 'select'
   | 'textarea'
   | 'switch'
-  | 'items_table';
+  | 'items_table'
+  | 'vouchers_table';
 
 export interface DocumentFormFieldSchema {
   /** Identificador de columna core de Document (cuando target='core') o clave JSON en formData (cuando target='custom'). */

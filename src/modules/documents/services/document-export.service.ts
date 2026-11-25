@@ -24,6 +24,7 @@ const MAX_ZIP_EXPORT_FILES = 100;
 
 const PAYMENT_STATUS_LABELS: Record<string, string> = {
   [DocumentPaymentStatus.PENDING]: 'Pendiente de pago',
+  [DocumentPaymentStatus.PARTIALLY_PAID]: 'Pagado parcial',
   [DocumentPaymentStatus.SCHEDULED]: 'Programado',
   [DocumentPaymentStatus.PAID]: 'Pagado',
   [DocumentPaymentStatus.NOT_APPLICABLE]: 'No aplica',

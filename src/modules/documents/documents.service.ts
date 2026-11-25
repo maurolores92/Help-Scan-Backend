@@ -36,6 +36,7 @@ import {
 } from './helpers/document-storage.helper';
 import { buildDocumentSearchWhere } from './helpers/document-search.helper';
 import { DocumentFiscalChecksService } from './services/document-fiscal-checks.service';
+import { DocumentLinksService } from './services/document-links.service';
 import { DocumentProcessingQueueService } from './services/document-processing-queue.service';
 import { DocumentUploadQueueService } from './services/document-upload-queue.service';
 import { TenantInboxWatcherService } from './services/tenant-inbox-watcher.service';
@@ -58,6 +59,7 @@ export class DocumentsService {
     private readonly inboxWatcherService: TenantInboxWatcherService,
     @Optional() private readonly clientsService?: ClientsService,
     @Optional() private readonly documentFormsService?: DocumentFormsService,
+    @Optional() private readonly documentLinksService?: DocumentLinksService,
   ) {}
 
   private assertValidCompanyScope(companyId?: number | null): number {
@@ -564,6 +566,16 @@ export class DocumentsService {
         .catch(() => null);
     }
 
+    let autoMatchedResult: { autoMatchedCount: number; autoMatchedLinks: any[] } = {
+      autoMatchedCount: 0,
+      autoMatchedLinks: [],
+    };
+    if (this.documentLinksService) {
+      autoMatchedResult = await this.documentLinksService
+        .runAutoExactMatchingForDocument(doc.id, doc.companyId, userId)
+        .catch(() => ({ autoMatchedCount: 0, autoMatchedLinks: [] }));
+    }
+
     const refreshedDoc = await this.findById(doc.id, companyId).catch(() => doc);
 
     await this.auditService.log({
@@ -588,6 +600,7 @@ export class DocumentsService {
     return {
       message: 'Documento validado y confirmado exitosamente',
       document: refreshedDoc,
+      autoMatchedCount: autoMatchedResult.autoMatchedCount,
     };
   }
 
@@ -775,6 +788,12 @@ export class DocumentsService {
       }
     }
 
+    if (this.documentLinksService) {
+      await this.documentLinksService
+        .cleanupLinksForDeletedDocument(doc.id, doc.companyId)
+        .catch(() => null);
+    }
+
     await doc.destroy();
 
     await this.auditService.log({
@@ -822,7 +841,13 @@ export class DocumentsService {
         }
       }
 
-      await doc.destroy();
+      if (this.documentLinksService) {
+      await this.documentLinksService
+        .cleanupLinksForDeletedDocument(doc.id, doc.companyId)
+        .catch(() => null);
+    }
+
+    await doc.destroy();
       deletedCount++;
       if (deletedNames.length < 5) {
         deletedNames.push(doc.originalName);

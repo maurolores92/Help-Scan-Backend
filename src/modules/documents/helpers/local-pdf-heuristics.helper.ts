@@ -57,16 +57,91 @@ export interface UniversalDocumentExtractionResult {
 }
 
 const KNOWN_TYPE_PATTERNS: Array<{ type: string; regex: RegExp }> = [
+  {
+    type: 'nota_credito',
+    regex: /\b(nota\s+de\s+cr[eé]dito|credit\s+note|n\.?\s*c\.?\s*[abcme]\b|c[oó]d\.?\s*(?:0?03|0?08|0?13|0?53|203|208|213)\b)/i,
+  },
+  {
+    type: 'nota_debito',
+    regex: /\b(nota\s+de\s+d[eé]bito|debit\s+note|n\.?\s*d\.?\s*[abcme]\b|c[oó]d\.?\s*(?:0?02|0?07|0?12|0?52|202|207|212)\b)/i,
+  },
+  {
+    type: 'certificado_retencion',
+    regex: /\b(certificado\s+de\s+retenci[oó]n|constancia\s+de\s+retenci[oó]n|agente\s+de\s+retenci[oó]n|sicore|sire\b)/i,
+  },
+  { type: 'orden_pago', regex: /\b(orden\s+de\s+pago)\b/i },
+  {
+    type: 'transferencia_pago',
+    regex: /\b(comprobante\s+de\s+transferencia|transferencia\s+bancaria|id\s*coelsa|comprobante\s+de\s+dep[oó]sito|debin\b)/i,
+  },
+  {
+    type: 'ticket_fiscal',
+    regex: /\b(tique\s+factura|ticket\s+factura|controlador\s+fiscal|tique\s+consumidor\s+final|c[oó]d\.?\s*(?:0?81|0?82|0?83|111)\b)/i,
+  },
   { type: 'factura', regex: /\b(factura|invoice|comprobante\s+electr[oó]nico|cae\b)/i },
   { type: 'presupuesto', regex: /\b(presupuesto|cotizaci[oó]n|quotation)/i },
   { type: 'nota_pedido', regex: /\b(nota\s+de\s+pedido|solicitud\s+de\s+compra)/i },
   { type: 'orden_compra', regex: /\b(orden\s+de\s+compra|purchase\s+order|\bo[\.\s]?c[\.\s]?\b)/i },
   { type: 'remito', regex: /\b(remito|gu[ií]a\s+de\s+despacho|entrega\s+de\s+mercader[ií]a)/i },
-  { type: 'recibo', regex: /\b(recibo|comprobante\s+de\s+pago|orden\s+de\s+pago)/i },
+  { type: 'recibo', regex: /\b(recibo|comprobante\s+de\s+pago)/i },
   { type: 'orden_servicio', regex: /\b(servicio\s+t[eé]cnico|orden\s+de\s+servicio|parte\s+t[eé]cnico|informe\s+t[eé]cnico)/i },
   { type: 'contrato', regex: /\b(contrato|acuerdo|convenio|cl[aá]usula)/i },
   { type: 'legajo', regex: /\b(legajo|curr[ií]culum|recibo\s+de\s+haberes|alta\s+temprana)/i },
 ];
+
+const ARCA_DEBIT_NOTE_CODES = new Set(['002', '007', '012', '052', '202', '207', '212', '2', '7', '12', '52']);
+const ARCA_CREDIT_NOTE_CODES = new Set(['003', '008', '013', '053', '203', '208', '213', '3', '8', '13', '53']);
+const ARCA_TICKET_CODES = new Set(['081', '082', '083', '111', '81', '82', '83']);
+
+/**
+ * Refina el documentType cuando Gemini u otro extractor devuelve "factura" u "otro",
+ * pero los códigos ARCA o el encabezado del comprobante identifican inequívocamente
+ * una Nota de Débito, Nota de Crédito o Tique Fiscal.
+ */
+export function refineArcaDocumentType(
+  rawType?: string | null,
+  rawText?: string | null,
+  attributes?: Record<string, any> | null,
+  summary?: string | null,
+): string {
+  const norm = String(rawType || 'otro')
+    .toLowerCase()
+    .trim()
+    .replace(/[\s-]+/g, '_');
+
+  const attrs = attributes || {};
+  const arcaCode = String(attrs.codigo_arca || attrs.codigo_afip || attrs.codigo_comprobante || '')
+    .replace(/\D+/g, '');
+  if (arcaCode) {
+    if (ARCA_CREDIT_NOTE_CODES.has(arcaCode)) return 'nota_credito';
+    if (ARCA_DEBIT_NOTE_CODES.has(arcaCode)) return 'nota_debito';
+    if (ARCA_TICKET_CODES.has(arcaCode)) return 'ticket_fiscal';
+  }
+
+  const subtipo = String(attrs.subtipo_fiscal || attrs.clase_comprobante || '').toLowerCase();
+  if (subtipo.includes('nota de cr') || subtipo.includes('crédito') || subtipo.includes('credito')) {
+    return 'nota_credito';
+  }
+  if (subtipo.includes('nota de d') || subtipo.includes('débito') || subtipo.includes('debito')) {
+    return 'nota_debito';
+  }
+
+  // Si se clasificó genéricamente como factura/comprobante/otro, revisar cabecera del texto o resumen
+  if (norm === 'otro' || norm === 'documento_general' || norm.startsWith('factura')) {
+    const headerSample = `${String(summary || '')}\n${String(rawText || '').slice(0, 1200)}`;
+    if (/\b(nota\s+de\s+cr[eé]dito|c[oó]d\.?\s*(?:0?03|0?08|0?13|0?53|203|208|213))\b/i.test(headerSample)) {
+      return 'nota_credito';
+    }
+    if (/\b(nota\s+de\s+d[eé]bito|c[oó]d\.?\s*(?:0?02|0?07|0?12|0?52|202|207|212))\b/i.test(headerSample)) {
+      return 'nota_debito';
+    }
+    if (/\b(tique\s+factura|ticket\s+factura|controlador\s+fiscal|c[oó]d\.?\s*(?:0?81|0?82|0?83|111))\b/i.test(headerSample)) {
+      return 'ticket_fiscal';
+    }
+  }
+
+  return norm || 'otro';
+}
 
 const SPANISH_MONTHS: Record<string, string> = {
   enero: '01',

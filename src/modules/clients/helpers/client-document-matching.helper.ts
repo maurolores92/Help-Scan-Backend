@@ -27,16 +27,15 @@ export function normalizeDocumentTypeBucket(rawType?: string | null): string {
     .toLowerCase()
     .replace(/[\s-]+/g, '_');
   if (!norm) return 'documento_general';
-  if (
-    norm.includes('factura') ||
-    norm.includes('nota_cred') ||
-    norm.includes('nota_deb') ||
-    norm.includes('tique') ||
-    norm.includes('ticket') ||
-    norm === 'fce' ||
-    norm === 'invoice' ||
-    norm === 'comprobante_fiscal'
-  ) {
+  if (norm.includes('nota_cred') || norm === 'nc' || norm === 'nce') return 'nota_credito';
+  if (norm.includes('nota_deb') || norm === 'nd' || norm === 'nde') return 'nota_debito';
+  if (norm.includes('retencion') || norm === 'sire' || norm === 'sicore') return 'certificado_retencion';
+  if (norm.includes('orden_pago') || norm === 'op') return 'orden_pago';
+  if (norm.includes('transferencia') || norm.includes('deposito') || norm.includes('mercado_pago')) {
+    return 'transferencia_pago';
+  }
+  if (norm.includes('tique') || norm.includes('ticket')) return 'ticket_fiscal';
+  if (norm.includes('factura') || norm === 'fce' || norm === 'invoice' || norm === 'comprobante_fiscal') {
     return 'factura';
   }
   if (norm.includes('remito') || norm.includes('guia_despacho')) return 'remito';
@@ -47,7 +46,7 @@ export function normalizeDocumentTypeBucket(rawType?: string | null): string {
     return 'orden_compra';
   }
   if (norm.includes('nota_pedido') || norm.includes('solicitud_pedido')) return 'nota_pedido';
-  if (norm.includes('recibo') || norm.includes('orden_pago') || norm === 'comprobante_pago') {
+  if (norm.includes('recibo') || norm === 'comprobante_cobro') {
     return 'recibo';
   }
   if (norm.includes('servicio') || norm.includes('tecnic') || norm.includes('mantenimiento')) {

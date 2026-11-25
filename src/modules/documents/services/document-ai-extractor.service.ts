@@ -4,6 +4,7 @@ import { readDecryptedVaultFile } from '../../../common/utils/vault-crypto.util'
 import pdfParse = require('pdf-parse');
 import {
   extractUniversalHeuristicsFromText,
+  refineArcaDocumentType,
   UniversalDocumentExtractionResult,
 } from '../helpers/local-pdf-heuristics.helper';
 
@@ -14,7 +15,8 @@ const EXTRACTION_SYSTEM_PROMPT = `Eres un motor experto de análisis documental 
 
 INSTRUCCIONES CLAVE DE EXTRACCIÓN Y NORMALIZACIÓN:
 1. Comprobantes fiscales y comerciales:
-   - Identifica el tipo exacto: "factura_a", "factura_b", "factura_c", "remito", "presupuesto", "nota_pedido", "orden_compra", "recibo", "orden_servicio", "contrato", "legajo", "otro".
+   - Identifica el tipo exacto: "factura_a", "factura_b", "factura_c", "nota_credito", "nota_debito", "ticket_fiscal", "remito", "presupuesto", "nota_pedido", "orden_compra", "recibo", "orden_pago", "certificado_retencion", "transferencia_pago", "orden_servicio", "contrato", "legajo", "otro".
+   - IMPORTANTE: NO clasifiques una Nota de Crédito (cód. ARCA 003/008/013/053/203), Nota de Débito (cód. ARCA 002/007/012/052/202), Tique Fiscal (081/082/083/111), Orden de Pago, Certificado de Retención ni Transferencia bancaria como "factura" o "recibo". Si el encabezado dice "NOTA DE DÉBITO" o código ARCA 002/007/012/052/202, devuelve ESTRICTAMENTE "nota_debito". Si dice "NOTA DE CRÉDITO" o 003/008/013/053/203, devuelve ESTRICTAMENTE "nota_credito".
    - Número de documento: Si tiene punto de venta o sucursal, normaliza a formato de 5 y 8 dígitos ej: "00008-00041980" o el identificador visible.
    - Emisor vs Receptor y Logos (MUY IMPORTANTE):
      * EMISOR ("issuerName", "issuerTaxId"): es SIEMPRE la empresa/persona que emite el comprobante. Suele estar en el membrete superior (arriba de "ORIGINAL" / letra A/B/C/R / "Señores:"), frecuentemente **dentro de un LOGO gráfico** o junto a Punto de Venta / Ingresos Brutos / Inicio de Actividades. Si analizas el PDF visualmente y el nombre del emisor figura solo dentro del logotipo de cabecera, léelo directamente del logo y devuélvelo en "issuerName".
@@ -34,10 +36,10 @@ INSTRUCCIONES CLAVE DE EXTRACCIÓN Y NORMALIZACIÓN:
    - Ítems / Artículos: Extrae cada renglón de producto o servicio con { "code": string|null, "description": string, "quantity": number|null, "unitPrice": number|null, "subtotal": number|null }.
    - Equipos y Servicios Técnicos: Si el comprobante menciona bienes, vehículos, equipos o activos en reparación/servicio, extrae en "attributes": "tipo_activo", "modelo", "numero_serie", "contador" (si aplica), "falla_reportada" y "trabajo_realizado".
    - Datos fiscales ARCA / Comprobantes específicos (devolver en "attributes" cuando aparezcan en el documento):
-     * Factura/NC/ND ARCA: "codigo_arca" (ej: 001,006,011,003,201), "subtipo_fiscal" ("Factura" | "Nota de Crédito" | "Nota de Débito" | "Factura de Crédito Electrónica (FCE)" | "Tique / Ticket Factura"), "tipo_autorizacion" ("CAE"|"CAEA"|"CAI"), "concepto_arca" ("Productos"|"Servicios"|"Productos y Servicios"), "periodo_desde", "periodo_hasta", "condicion_iva_emisor", "ingresos_brutos_emisor", "inicio_actividades", "tipo_cambio", "iva_21", "iva_105", "iva_27", "percepcion_iibb", "comprobante_asociado".
-     * Presupuesto: "validez_oferta", "plazo_entrega", "condicion_precios_iva" ("Precios + IVA (Neto)" | "Precios Finales (IVA Incluido)" | "Exento / Sin IVA"), "descuento".
-     * Remito: "cot", "cuit_transporte", "patente", "bultos", "numero_guia", "valor_declarado".
-     * Recibo / Orden de Pago: "clase_recibo" ("Recibo X (Cobranza / Interno)" | "Orden de Pago (Tesorería)" | "Recibo Fiscal ARCA (Letra A/B/C)"), "banco", "comprobantes_imputados", "retenciones".
+     * Factura/NC/ND ARCA: "codigo_arca" (ej: 001,002,003,006,008,011,201), "subtipo_fiscal" ("Factura" | "Nota de Crédito" | "Nota de Débito" | "Factura de Crédito Electrónica (FCE)"), "tipo_autorizacion" ("CAE"|"CAEA"|"CAI"), "concepto_arca" ("Productos"|"Servicios"|"Productos y Servicios"), "periodo_desde", "periodo_hasta", "condicion_iva_emisor", "ingresos_brutos_emisor", "inicio_actividades", "tipo_cambio", "iva_21", "iva_105", "iva_27", "percepcion_iibb", "comprobante_asociado", "motivo_credito", "motivo_debito".
+     * Ticket Fiscal: "codigo_arca" (081/082/083/111), "hora_emision", "serie_controlador", "categoria_gasto", "impuestos_internos".
+     * Recibo / Orden de Pago: "clase_recibo" ("Recibo X (Cobranza / Interno)" | "Recibo Fiscal ARCA (Letra A/B/C)"), "banco", "cuenta_origen", "cbu_destino", "retenciones", "retencion_ganancias", "retencion_iva", "retencion_iibb", "retencion_suss", y "comprobantes_imputados": arreglo JSON [ { "voucherType": "Factura A", "voucherNumber": "00004-00001234", "voucherDate": "YYYY-MM-DD|null", "originalAmount": number|null, "appliedAmount": number|null } ].
+     * Certificado de Retención / Transferencia: "impuesto_retenido", "codigo_regimen", "sistema_emisor", "base_imponible", "alicuota", "iibb_retenido", "modalidad_transferencia", "coelsa_id", "banco_origen", "cbu_origen", "banco_destino", "cbu_destino", "hora_operacion".
      * Contrato / Legajo RRHH: "tipo_contrato", "fecha_inicio", "renovacion_automatica", "dias_preaviso", "indice_ajuste", "subtipo_rrhh", "puesto", "fecha_ingreso", "haberes_brutos", "deducciones", "obra_social".
    - Documentos escaneados, fotos o manuscritos (remitos / facturas manuales):
      * Si recibes la imagen/PDF junto con texto OCR auxiliar, prioriza siempre lo que observas visualmente en la imagen del documento (el OCR puede omitir o deformar texto escrito a mano).
@@ -555,9 +557,29 @@ export class DocumentAiExtractorService implements OnModuleInit {
         ? null
         : safeFallbackIssuer;
 
+    const mergedAttributes = {
+      ...fallback.extractedData.attributes,
+      ...(parsed.attributes && typeof parsed.attributes === 'object' ? parsed.attributes : {}),
+      ...(parsed.cae ? { cae: parsed.cae } : {}),
+      ...(parsed.documentLetter ? { letra: parsed.documentLetter } : {}),
+      ...(parsed.purchaseOrderNumber ? { orden_compra: parsed.purchaseOrderNumber } : {}),
+      ...(parsed.department ? { sector: parsed.department } : {}),
+    };
+    const resolvedRawText =
+      params.mode === 'gemini_vision'
+        ? String(parsed.rawText || '').trim() || params.nativeText
+        : params.nativeText || String(parsed.rawText || '').trim();
+    const resolvedSummary = String(parsed.summary || fallback.summary);
+    const refinedDocumentType = refineArcaDocumentType(
+      normalizedType || fallback.documentType,
+      resolvedRawText,
+      mergedAttributes,
+      resolvedSummary,
+    );
+
     const result: UniversalDocumentExtractionResult = {
-      documentType: normalizedType || fallback.documentType,
-      summary: String(parsed.summary || fallback.summary),
+      documentType: refinedDocumentType,
+      summary: resolvedSummary,
       documentNumber: parsed.documentNumber ? String(parsed.documentNumber).slice(0, 100) : fallback.documentNumber,
       documentDate:
         typeof parsed.documentDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsed.documentDate)
@@ -825,7 +847,12 @@ export class DocumentAiExtractorService implements OnModuleInit {
     }));
 
     return {
-      documentType: data.documentType || data.document_type || 'otro',
+      documentType: refineArcaDocumentType(
+        data.documentType || data.document_type || 'otro',
+        amountCheckText,
+        data.extractedData?.attributes || data.extracted_data?.attributes || data.attributes || {},
+        data.summary,
+      ),
       summary: data.summary || `Documento procesado con OCR (${originalFileName})`,
       documentNumber: data.documentNumber || data.document_number || null,
       documentDate: data.documentDate || data.document_date || null,

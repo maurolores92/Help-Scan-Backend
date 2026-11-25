@@ -1,17 +1,20 @@
 import { Module } from '@nestjs/common';
 import { SequelizeModule } from '@nestjs/sequelize';
 import { Document } from './document.model';
+import { DocumentLink } from './models/document-link.model';
 import { DocumentTypeForm } from './models/document-type-form.model';
 import { DocumentFormRecord } from './models/document-form-record.model';
 import { Company } from '../companies/company.model';
 import { FtpDevice } from '../ftp-devices/ftp-device.model';
 import { DocumentsService } from './documents.service';
+import { DocumentLinksController } from './document-links.controller';
 import { DocumentsController } from './documents.controller';
 import { DocumentAiExtractorService } from './services/document-ai-extractor.service';
 import { DocumentDueAlertsService } from './services/document-due-alerts.service';
 import { DocumentExportService } from './services/document-export.service';
 import { DocumentFiscalChecksService } from './services/document-fiscal-checks.service';
 import { DocumentFormsService } from './services/document-forms.service';
+import { DocumentLinksService } from './services/document-links.service';
 import { DocumentProcessingQueueService } from './services/document-processing-queue.service';
 import { DocumentUploadQueueService } from './services/document-upload-queue.service';
 import { TenantInboxWatcherService } from './services/tenant-inbox-watcher.service';
@@ -24,6 +27,7 @@ import { PlansModule } from '../plans/plans.module';
   imports: [
     SequelizeModule.forFeature([
       Document,
+      DocumentLink,
       DocumentTypeForm,
       DocumentFormRecord,
       Company,
@@ -34,11 +38,12 @@ import { PlansModule } from '../plans/plans.module';
     NotificationsModule,
     PlansModule,
   ],
-  controllers: [DocumentsController],
+  controllers: [DocumentLinksController, DocumentsController],
   providers: [
     DocumentAiExtractorService,
     DocumentFiscalChecksService,
     DocumentFormsService,
+    DocumentLinksService,
     DocumentDueAlertsService,
     DocumentExportService,
     DocumentProcessingQueueService,
@@ -50,6 +55,7 @@ import { PlansModule } from '../plans/plans.module';
     DocumentsService,
     DocumentFiscalChecksService,
     DocumentFormsService,
+    DocumentLinksService,
     TenantInboxWatcherService,
     DocumentProcessingQueueService,
     DocumentUploadQueueService,

@@ -177,7 +177,14 @@ export function buildDocumentValidationWarnings(
  */
 export function resolveDefaultPaymentStatus(documentType?: string | null): 'PENDING' | 'NOT_APPLICABLE' {
   const normalized = String(documentType || '').toLowerCase().trim();
-  if (normalized === 'remito' || normalized === 'legajo') {
+  if (
+    normalized === 'remito' ||
+    normalized === 'legajo' ||
+    normalized === 'nota_credito' ||
+    normalized === 'certificado_retencion' ||
+    normalized === 'transferencia_pago' ||
+    normalized === 'presupuesto'
+  ) {
     return 'NOT_APPLICABLE';
   }
   return 'PENDING';

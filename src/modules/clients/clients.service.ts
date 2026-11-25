@@ -1,15 +1,11 @@
-import {
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, BadRequestException, ConflictException, ForbiddenException, NotFoundException, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { col, fn, Op } from 'sequelize';
 import { Sequelize } from 'sequelize-typescript';
 import { Client } from './client.model';
 import { Document, DocumentStatus } from '../documents/document.model';
+import { DocumentLink } from '../documents/models/document-link.model';
+import { computeDocumentBalanceSummary } from '../documents/helpers/document-balance.helper';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/audit.model';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -86,6 +82,9 @@ export class ClientsService {
     private readonly sequelize: Sequelize,
     private readonly auditService: AuditService,
     private readonly notificationsService: NotificationsService,
+    @Optional()
+    @InjectModel(DocumentLink)
+    private readonly documentLinkModel?: typeof DocumentLink,
   ) {}
 
   private assertValidCompanyScope(companyId?: number | null): number {
@@ -361,11 +360,56 @@ export class ClientsService {
 
     const totalItems = filtered.length;
     const offset = (page - 1) * limit;
-    const paged = filtered.slice(offset, offset + limit).map(({ doc, clientRole, normalizedType }) => ({
-      ...doc,
-      clientRole,
-      normalizedDocumentType: normalizedType,
-    }));
+    const pagedRaw = filtered.slice(offset, offset + limit);
+
+    let linksByDocId = new Map<number, any[]>();
+    if (this.documentLinkModel && pagedRaw.length > 0) {
+      const pagedIds = pagedRaw.map((item) => item.doc.id);
+      const links = await this.documentLinkModel.findAll({
+        where: {
+          companyId: scopedCompanyId,
+          [Op.or]: [{ sourceDocumentId: pagedIds }, { targetDocumentId: pagedIds }],
+        },
+        include: [{ model: Document, as: 'sourceDocument', attributes: ['id', 'totalAmount'] }],
+      });
+      for (const lnk of links) {
+        const plainLink = typeof (lnk as any).toJSON === 'function' ? (lnk as any).toJSON() : lnk;
+        const srcList = linksByDocId.get(plainLink.sourceDocumentId) || [];
+        srcList.push(plainLink);
+        linksByDocId.set(plainLink.sourceDocumentId, srcList);
+
+        if (plainLink.targetDocumentId !== plainLink.sourceDocumentId) {
+          const tgtList = linksByDocId.get(plainLink.targetDocumentId) || [];
+          tgtList.push(plainLink);
+          linksByDocId.set(plainLink.targetDocumentId, tgtList);
+        }
+      }
+    }
+
+    const paged = pagedRaw.map(({ doc, clientRole, normalizedType }) => {
+      const docLinks = linksByDocId.get(doc.id) || [];
+      const balanceSummary = computeDocumentBalanceSummary({
+        documentId: doc.id,
+        documentType: doc.documentType,
+        totalAmount: doc.totalAmount,
+        currentPaymentStatus: doc.paymentStatus,
+        links: docLinks.map((l) => ({
+          sourceDocumentId: l.sourceDocumentId,
+          targetDocumentId: l.targetDocumentId,
+          linkType: l.linkType,
+          appliedAmount: l.appliedAmount,
+          sourceTotalAmount: l.sourceDocument?.totalAmount,
+        })),
+      });
+
+      return {
+        ...doc,
+        clientRole,
+        normalizedDocumentType: normalizedType,
+        linkedCount: docLinks.length,
+        balanceSummary,
+      };
+    });
 
     const typeCounts = Object.entries(byTypeMap)
       .map(([type, count]) => ({ documentType: type, count }))

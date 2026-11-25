@@ -132,7 +132,31 @@ export class DocumentFormsService {
       );
       if (aliasHit) return aliasHit;
 
-      if (normalized.includes('factura') || normalized.includes('nota_cred') || normalized.includes('nota_deb') || normalized.includes('tique') || normalized.includes('ticket')) {
+      if (normalized.includes('nota_cred') || normalized === 'nc' || normalized === 'nce') {
+        const ncForm = forms.find((f) => f.code === 'nota_credito');
+        if (ncForm) return ncForm;
+      }
+      if (normalized.includes('nota_deb') || normalized === 'nd' || normalized === 'nde') {
+        const ndForm = forms.find((f) => f.code === 'nota_debito');
+        if (ndForm) return ndForm;
+      }
+      if (normalized.includes('retencion') || normalized === 'sire' || normalized === 'sicore') {
+        const retForm = forms.find((f) => f.code === 'certificado_retencion');
+        if (retForm) return retForm;
+      }
+      if (normalized.includes('orden_pago') || normalized === 'op') {
+        const opForm = forms.find((f) => f.code === 'orden_pago');
+        if (opForm) return opForm;
+      }
+      if (normalized.includes('transferencia') || normalized.includes('deposito') || normalized.includes('mercado_pago')) {
+        const trForm = forms.find((f) => f.code === 'transferencia_pago');
+        if (trForm) return trForm;
+      }
+      if (normalized.includes('ticket') || normalized.includes('tique')) {
+        const tkForm = forms.find((f) => f.code === 'ticket_fiscal');
+        if (tkForm) return tkForm;
+      }
+      if (normalized.includes('factura') || normalized === 'fce' || normalized === 'invoice') {
         const facturaForm = forms.find((f) => f.code === 'factura');
         if (facturaForm) return facturaForm;
       }
@@ -152,7 +176,7 @@ export class DocumentFormsService {
         const npForm = forms.find((f) => f.code === 'nota_pedido');
         if (npForm) return npForm;
       }
-      if (normalized.includes('recibo') || normalized.includes('orden_pago')) {
+      if (normalized.includes('recibo')) {
         const recForm = forms.find((f) => f.code === 'recibo');
         if (recForm) return recForm;
       }
@@ -192,20 +216,33 @@ export class DocumentFormsService {
     let documentLetter: string | undefined = currentLetter || undefined;
 
     if (resolvedCode === 'factura') {
-      const letterMatch = raw.match(/^(?:factura|nota_credito|nota_debito)_([abcme])$/);
+      const letterMatch = raw.match(/^factura_([abcme])$/);
       if (!documentLetter && letterMatch) {
         documentLetter = letterMatch[1].toUpperCase();
       }
-      if (raw.includes('nota_cred')) {
-        customDefaults.fiscalSubtype = 'Nota de Crédito';
-      } else if (raw.includes('nota_deb')) {
-        customDefaults.fiscalSubtype = 'Nota de Débito';
-      } else if (raw.includes('fce')) {
-        customDefaults.fiscalSubtype = 'Factura de Crédito Electrónica (FCE)';
-      } else if (raw.includes('ticket') || raw.includes('tique')) {
-        customDefaults.fiscalSubtype = 'Tique / Ticket Factura';
-      } else {
-        customDefaults.fiscalSubtype = 'Factura';
+      customDefaults.fiscalSubtype = raw.includes('fce')
+        ? 'Factura de Crédito Electrónica (FCE)'
+        : 'Factura';
+    } else if (resolvedCode === 'nota_credito') {
+      const letterMatch = raw.match(/^(?:nota_credito|nota_de_credito|nc)_([abcme])$/);
+      if (!documentLetter && letterMatch) {
+        documentLetter = letterMatch[1].toUpperCase();
+      }
+      customDefaults.fiscalSubtype = raw.includes('nce')
+        ? 'Nota de Crédito Electrónica MiPyME (NCE)'
+        : 'Nota de Crédito';
+    } else if (resolvedCode === 'nota_debito') {
+      const letterMatch = raw.match(/^(?:nota_debito|nota_de_debito|nd)_([abcme])$/);
+      if (!documentLetter && letterMatch) {
+        documentLetter = letterMatch[1].toUpperCase();
+      }
+      customDefaults.fiscalSubtype = raw.includes('nde')
+        ? 'Nota de Débito Electrónica MiPyME (NDE)'
+        : 'Nota de Débito';
+    } else if (resolvedCode === 'ticket_fiscal') {
+      const letterMatch = raw.match(/^(?:ticket|tique)_([abct])$/);
+      if (!documentLetter && letterMatch) {
+        documentLetter = letterMatch[1].toUpperCase();
       }
     } else if (resolvedCode === 'remito') {
       if (!documentLetter) {
@@ -213,9 +250,7 @@ export class DocumentFormsService {
         else if (raw.endsWith('_r')) documentLetter = 'R';
       }
     } else if (resolvedCode === 'recibo') {
-      if (raw.includes('orden_pago') || raw.includes('orden_de_pago')) {
-        customDefaults.receiptClass = 'Orden de Pago (Tesorería)';
-      } else if (raw.endsWith('_a') || raw.endsWith('_b') || raw.endsWith('_c')) {
+      if (raw.endsWith('_a') || raw.endsWith('_b') || raw.endsWith('_c')) {
         customDefaults.receiptClass = 'Recibo Fiscal ARCA (Letra A/B/C)';
         if (!documentLetter) {
           documentLetter = raw.slice(-1).toUpperCase();
@@ -284,6 +319,9 @@ export class DocumentFormsService {
   }
 
   private coerceFieldValue(field: DocumentFormFieldSchema, rawVal: any): any {
+    if (field.fieldType === 'vouchers_table') {
+      return this.normalizeAppliedVouchers(rawVal);
+    }
     if (field.fieldType === 'switch') {
       if (typeof rawVal === 'boolean') return rawVal;
       const s = String(rawVal).trim().toLowerCase();
@@ -295,7 +333,102 @@ export class DocumentFormsService {
       const num = Number(cleaned);
       return Number.isFinite(num) ? num : rawVal;
     }
+    if (Array.isArray(rawVal) || (typeof rawVal === 'object' && rawVal !== null)) {
+      return this.formatStructuredValueAsText(rawVal);
+    }
     return typeof rawVal === 'string' ? rawVal.trim() : rawVal;
+  }
+
+  private formatStructuredValueAsText(rawVal: any): string {
+    if (Array.isArray(rawVal)) {
+      return rawVal
+        .map((item) => {
+          if (item && typeof item === 'object') {
+            const label = [
+              item.voucherType || item.tipo_comprobante || item.tipo || '',
+              item.voucherNumber || item.numero_comprobante || item.numero || item.comprobante || '',
+            ]
+              .filter(Boolean)
+              .join(' ');
+            const amt = item.appliedAmount ?? item.importe_imputado ?? item.importe ?? item.montoAplicado;
+            if (label || amt !== undefined) {
+              return `${label || 'Comprobante'}${amt !== undefined && amt !== null ? ` ($${amt})` : ''}`;
+            }
+            return JSON.stringify(item);
+          }
+          return String(item ?? '').trim();
+        })
+        .filter(Boolean)
+        .join('\n');
+    }
+    return JSON.stringify(rawVal);
+  }
+
+  private normalizeAppliedVouchers(rawVal: any): Array<Record<string, any>> {
+    let source = rawVal;
+    if (typeof source === 'string') {
+      const trimmed = source.trim();
+      if (!trimmed) return [];
+      try {
+        source = JSON.parse(trimmed);
+      } catch {
+        return trimmed
+          .split(/[\n,;]+/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => ({
+            voucherType: 'Factura',
+            voucherNumber: line,
+            voucherDate: null,
+            originalAmount: null,
+            appliedAmount: null,
+          }));
+      }
+    }
+    if (!Array.isArray(source)) return [];
+
+    return source
+      .filter((row) => row && typeof row === 'object')
+      .map((row) => {
+        const rawOrig =
+          row.originalAmount ??
+          row.importe_original ??
+          row.montoOriginal ??
+          row.importeTotal ??
+          row.total;
+        const rawApplied =
+          row.appliedAmount ??
+          row.importe_imputado ??
+          row.montoAplicado ??
+          row.importe;
+
+        return {
+          voucherType: String(
+            row.voucherType || row.tipo_comprobante || row.tipo || row.type || 'Factura',
+          ).trim(),
+          voucherNumber: String(
+            row.voucherNumber ||
+              row.numero_comprobante ||
+              row.numero ||
+              row.number ||
+              row.comprobante ||
+              '',
+          ).trim(),
+          voucherDate: row.voucherDate || row.fecha || row.date || null,
+          originalAmount:
+            rawOrig !== undefined && rawOrig !== null && rawOrig !== '' && Number.isFinite(Number(rawOrig))
+              ? Number(rawOrig)
+              : null,
+          appliedAmount:
+            rawApplied !== undefined &&
+            rawApplied !== null &&
+            rawApplied !== '' &&
+            Number.isFinite(Number(rawApplied))
+              ? Number(rawApplied)
+              : null,
+        };
+      })
+      .filter((row) => row.voucherNumber.length > 0 || row.appliedAmount !== null);
   }
 
   async upsertFormRecord(params: {

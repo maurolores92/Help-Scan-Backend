@@ -1,0 +1,86 @@
+import {
+  buildArcaAmountsSection,
+  buildArcaPartiesSection,
+  DefaultDocumentFormSeed,
+} from './form-shared.constants';
+
+export const NOTA_CREDITO_FORM_SEED: DefaultDocumentFormSeed = {
+  code: 'nota_credito',
+  label: 'Nota de Crédito (ARCA A/B/C/M/FCE)',
+  description:
+    'Comprobante fiscal ARCA para anulaciones, devoluciones o bonificaciones que restan saldo sobre facturas emitidas o recibidas.',
+  icon: 'tabler:file-minus',
+  displayOrder: 2,
+  version: 1,
+  matchAliases: [
+    'nota_credito',
+    'nota_de_credito',
+    'nota_credito_a',
+    'nota_credito_b',
+    'nota_credito_c',
+    'nota_credito_m',
+    'nota_credito_e',
+    'nce',
+    'nc',
+  ],
+  aiExtractionGuide:
+    'Extraer datos fiscales ARCA de Nota de Crédito: letra (A/B/C/M/E), código ARCA (003,008,013,053,203,208,213), comprobante asociado obligatorio (tipo y N° de factura que anula/ajusta), motivo del crédito (Anulación, Devolución, Descuento, Diferencia de precio), CAE/CAI, emisor, receptor e importes acreditados.',
+  sectionsSchema: [
+    {
+      id: 'nc_header',
+      title: '1. Comprobante Nota de Crédito ARCA',
+      icon: 'tabler:file-minus',
+      fields: [
+        {
+          key: 'fiscalSubtype',
+          target: 'custom',
+          label: 'Subtipo ARCA',
+          fieldType: 'select',
+          colSpan: 4,
+          defaultValue: 'Nota de Crédito',
+          options: ['Nota de Crédito', 'Nota de Crédito Electrónica MiPyME (NCE)'],
+          aiAttrKeys: ['subtipo_fiscal', 'clase_comprobante'],
+        },
+        { key: 'documentLetter', target: 'core', label: 'Letra', fieldType: 'select', colSpan: 4, options: ['A', 'B', 'C', 'M', 'E'] },
+        { key: 'afipVoucherCode', target: 'custom', label: 'Código ARCA', fieldType: 'text', colSpan: 4, placeholder: 'Ej: 003, 008, 013, 203', aiAttrKeys: ['codigo_arca', 'codigo_afip', 'codigo_comprobante'] },
+        { key: 'pointOfSale', target: 'core', label: 'Punto de Venta', fieldType: 'text', colSpan: 4, placeholder: 'Ej: 00004' },
+        { key: 'documentNumber', target: 'core', label: 'N° Nota de Crédito', fieldType: 'text', colSpan: 4, required: true, placeholder: 'Ej: 00004-00000125' },
+        { key: 'documentDate', target: 'core', label: 'Fecha de Emisión', fieldType: 'date', colSpan: 4, required: true },
+        { key: 'authorizationType', target: 'custom', label: 'Tipo Autorización', fieldType: 'select', colSpan: 3, defaultValue: 'CAE', options: ['CAE', 'CAEA', 'CAI'], aiAttrKeys: ['tipo_autorizacion'] },
+        { key: 'cae', target: 'core', label: 'N° CAE / CAI', fieldType: 'text', colSpan: 5, placeholder: '14 dígitos numéricos' },
+        { key: 'caeDueDate', target: 'core', label: 'Vto. CAE / CAI', fieldType: 'date', colSpan: 4 },
+        {
+          key: 'creditReason',
+          target: 'custom',
+          label: 'Motivo de la Nota de Crédito',
+          fieldType: 'select',
+          colSpan: 4,
+          options: ['Anulación Total', 'Devolución de Mercadería', 'Descuento / Bonificación', 'Diferencia de Precio', 'Error de Facturación', 'Otro'],
+          aiAttrKeys: ['motivo_credito', 'motivo'],
+        },
+        {
+          key: 'associatedVoucherNumber',
+          target: 'custom',
+          label: 'Comprobante Asociado (ARCA)',
+          fieldType: 'text',
+          colSpan: 5,
+          placeholder: 'Ej: FA 00004-00041980',
+          aiAttrKeys: ['comprobante_asociado', 'factura_asociada'],
+        },
+        { key: 'referenceNumber', target: 'core', label: 'Referencia / Período Asociado', fieldType: 'text', colSpan: 3 },
+      ],
+    },
+    buildArcaPartiesSection(),
+    buildArcaAmountsSection('Total Acreditado'),
+    {
+      id: 'nc_items_notes',
+      title: '4. Detalle Acreditado y Observaciones',
+      icon: 'tabler:list-details',
+      fields: [
+        { key: 'items', target: 'core', label: 'Ítems Acreditados', fieldType: 'items_table', colSpan: 12 },
+        { key: 'summary', target: 'core', label: 'Resumen / Motivo', fieldType: 'textarea', colSpan: 6 },
+        { key: 'validationNotes', target: 'core', label: 'Notas Internas', fieldType: 'textarea', colSpan: 6 },
+      ],
+    },
+  ],
+};
