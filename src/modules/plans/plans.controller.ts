@@ -96,6 +96,12 @@ export class PlansController {
           },
           activeDocumentsCount: 0,
           activeFtpDevicesCount: 0,
+          channels: {
+            enabledModules: [],
+            whatsapp: { enabledInPlan: false, configured: false, active: false },
+            email: { enabledInPlan: false, configured: false, active: false },
+            telegram: { enabledInPlan: false, configured: false, active: false },
+          },
         };
       }
       throw new BadRequestException('El usuario no posee una compañía asociada');

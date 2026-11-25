@@ -264,6 +264,7 @@ describe('TenantQuotasService', () => {
       status: CompanyStatus.ACTIVE,
       useCustomLimits: false,
       totalDocumentsProcessed: 25,
+      enabledModules: ['documents', 'email'],
       plan: {
         id: 2,
         name: 'Pro',
@@ -294,6 +295,13 @@ describe('TenantQuotasService', () => {
     });
     expect(summary.storageMb.max).toBe(1024);
     expect(summary.totalDocumentsProcessed).toBe(25);
+    expect(summary.channels).toEqual(
+      expect.objectContaining({
+        whatsapp: expect.objectContaining({ enabledInPlan: false, active: false }),
+        email: expect.objectContaining({ enabledInPlan: true, active: false }),
+        telegram: expect.objectContaining({ enabledInPlan: false, active: false }),
+      }),
+    );
     expect(summary.processingBilling).toEqual(
       expect.objectContaining({
         processedCount: 18,

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { col, fn, Op } from 'sequelize';
 import { Plan } from '../plan.model';
@@ -7,6 +7,12 @@ import { Company } from '../../companies/company.model';
 import { Users, UserStatus } from '../../users/users.model';
 import { Document } from '../../documents/document.model';
 import { FtpDevice, FtpDeviceStatus } from '../../ftp-devices/ftp-device.model';
+import { CompanyEmailChannel } from '../../channels/models/company-email-channel.model';
+import {
+  CompanyWhatsappChannel,
+  WhatsappConnectionStatus,
+} from '../../channels/models/company-whatsapp-channel.model';
+import { CompanyTelegramChannel } from '../../channels/models/company-telegram-channel.model';
 import {
   buildQuotaMetric,
   bytesToMegabytes,
@@ -18,7 +24,7 @@ import {
 
 /**
  * Servicio especializado en el cálculo agregado y sin N+1 del resumen de cuotas
- * y consumo actual (usuarios, PDFs, MB en disco y consultas IA mensuales) por compañía.
+ * y consumo actual (usuarios, PDFs, MB en disco, procesamiento y canales activos) por compañía.
  */
 @Injectable()
 export class CompanyQuotaSummaryService {
@@ -29,6 +35,15 @@ export class CompanyQuotaSummaryService {
     @InjectModel(FtpDevice) private readonly ftpDeviceModel: typeof FtpDevice,
     @InjectModel(CompanyMonthlyUsage)
     private readonly monthlyUsageModel: typeof CompanyMonthlyUsage,
+    @Optional()
+    @InjectModel(CompanyEmailChannel)
+    private readonly emailChannelModel?: typeof CompanyEmailChannel,
+    @Optional()
+    @InjectModel(CompanyWhatsappChannel)
+    private readonly whatsappChannelModel?: typeof CompanyWhatsappChannel,
+    @Optional()
+    @InjectModel(CompanyTelegramChannel)
+    private readonly telegramChannelModel?: typeof CompanyTelegramChannel,
   ) {}
 
   /**
@@ -59,7 +74,15 @@ export class CompanyQuotaSummaryService {
     const companyIds = companies.map((c) => c.id);
     const period = getCurrentBillingPeriod();
 
-    const [userCountsRaw, docAggregatesRaw, aiUsagesRaw, ftpDeviceCountsRaw] = await Promise.all([
+    const [
+      userCountsRaw,
+      docAggregatesRaw,
+      aiUsagesRaw,
+      ftpDeviceCountsRaw,
+      emailChannelsRaw,
+      whatsappChannelsRaw,
+      telegramChannelsRaw,
+    ] = await Promise.all([
       this.userModel.findAll({
         attributes: ['companyId', [fn('COUNT', col('id')), 'activeCount']],
         where: {
@@ -94,7 +117,53 @@ export class CompanyQuotaSummaryService {
         group: ['companyId'],
         raw: true,
       }) as unknown as Promise<Array<{ companyId: number; activeCount: string | number }>>,
+      this.emailChannelModel
+        ? this.emailChannelModel.findAll({
+            attributes: ['companyId', 'isActive'],
+            where: { companyId: { [Op.in]: companyIds } },
+            raw: true,
+          })
+        : Promise.resolve([]),
+      this.whatsappChannelModel
+        ? this.whatsappChannelModel.findAll({
+            attributes: ['companyId', 'isActive', 'connectionStatus'],
+            where: { companyId: { [Op.in]: companyIds } },
+            raw: true,
+          })
+        : Promise.resolve([]),
+      this.telegramChannelModel
+        ? this.telegramChannelModel.findAll({
+            attributes: ['companyId', 'isActive'],
+            where: { companyId: { [Op.in]: companyIds } },
+            raw: true,
+          })
+        : Promise.resolve([]),
     ]);
+
+    const emailChannelMap = new Map<number, { isActive: boolean }>(
+      (emailChannelsRaw as any[]).map((c) => [
+        Number(c.companyId),
+        { isActive: Boolean(c.isActive) },
+      ]),
+    );
+    const whatsappChannelMap = new Map<
+      number,
+      { isActive: boolean; connectionStatus: string }
+    >(
+      (whatsappChannelsRaw as any[]).map((c) => [
+        Number(c.companyId),
+        {
+          isActive: Boolean(c.isActive),
+          connectionStatus: String(c.connectionStatus || ''),
+        },
+      ]),
+    );
+    const telegramChannelMap = new Map<number, { isActive: boolean }>(
+      (telegramChannelsRaw as any[]).map((c) => [
+        Number(c.companyId),
+        { isActive: Boolean(c.isActive) },
+      ]),
+    );
 
     const userCountMap = new Map<number, number>(
       userCountsRaw.map((r) => [Number(r.companyId), Number(r.activeCount || 0)]),
@@ -173,6 +242,40 @@ export class CompanyQuotaSummaryService {
         },
         activeDocumentsCount: docStats.count,
         activeFtpDevicesCount: ftpDeviceCountMap.get(company.id) ?? 0,
+        channels: (() => {
+          const enabledModules = Array.isArray(company.enabledModules)
+            ? company.enabledModules
+            : [];
+          const emailCh = emailChannelMap.get(company.id);
+          const waCh = whatsappChannelMap.get(company.id);
+          const tgCh = telegramChannelMap.get(company.id);
+          const waEnabled = enabledModules.includes('whatsapp');
+          const emailEnabled = enabledModules.includes('email');
+          const tgEnabled = enabledModules.includes('telegram');
+
+          return {
+            enabledModules,
+            whatsapp: {
+              enabledInPlan: waEnabled,
+              configured: Boolean(waCh),
+              active:
+                waEnabled &&
+                Boolean(waCh?.isActive) &&
+                waCh?.connectionStatus === WhatsappConnectionStatus.CONNECTED,
+              status: waCh?.connectionStatus || 'DISCONNECTED',
+            },
+            email: {
+              enabledInPlan: emailEnabled,
+              configured: Boolean(emailCh),
+              active: emailEnabled && Boolean(emailCh?.isActive),
+            },
+            telegram: {
+              enabledInPlan: tgEnabled,
+              configured: Boolean(tgCh),
+              active: tgEnabled && Boolean(tgCh?.isActive),
+            },
+          };
+        })(),
       });
     }
 

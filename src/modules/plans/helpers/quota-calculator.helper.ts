@@ -31,6 +31,20 @@ export interface DocumentProcessingBillingSummary {
   additionalCostArs: number;
 }
 
+export interface CompanyChannelIntegrationStatus {
+  enabledInPlan: boolean;
+  configured: boolean;
+  active: boolean;
+  status?: string;
+}
+
+export interface CompanyChannelsStatusSummary {
+  enabledModules: string[];
+  whatsapp: CompanyChannelIntegrationStatus;
+  email: CompanyChannelIntegrationStatus;
+  telegram: CompanyChannelIntegrationStatus;
+}
+
 export interface CompanyQuotaSummary {
   companyId: number;
   plan: {
@@ -50,6 +64,7 @@ export interface CompanyQuotaSummary {
   processingBilling?: DocumentProcessingBillingSummary;
   activeDocumentsCount?: number;
   activeFtpDevicesCount?: number;
+  channels?: CompanyChannelsStatusSummary;
 }
 
 const BYTES_PER_MB = 1024 * 1024;

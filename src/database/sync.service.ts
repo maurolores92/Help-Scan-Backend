@@ -115,6 +115,7 @@ export class SyncService implements OnModuleInit {
       `ALTER TABLE "companies" ADD COLUMN IF NOT EXISTS "max_pages" INTEGER DEFAULT NULL;`,
       `ALTER TABLE "companies" ADD COLUMN IF NOT EXISTS "total_pages_uploaded" INTEGER NOT NULL DEFAULT 0;`,
       `ALTER TABLE "companies" ADD COLUMN IF NOT EXISTS "total_documents_processed" INTEGER NOT NULL DEFAULT 0;`,
+      `UPDATE "companies" c SET "total_documents_processed" = COALESCE((SELECT SUM("ai_documents_processed") FROM "company_monthly_usages" u WHERE u."company_id" = c."id"), 0) WHERE "total_documents_processed" = 0;`,
       `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "active_session_id" VARCHAR(64) DEFAULT NULL;`,
       `ALTER TABLE "companies" ADD COLUMN IF NOT EXISTS "max_documents" INTEGER DEFAULT NULL;`,
       `ALTER TABLE "companies" ADD COLUMN IF NOT EXISTS "max_storage_mb" INTEGER DEFAULT NULL;`,

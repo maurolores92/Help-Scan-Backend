@@ -7,6 +7,9 @@ import { Company } from '../companies/company.model';
 import { Users } from '../users/users.model';
 import { Document } from '../documents/document.model';
 import { FtpDevice } from '../ftp-devices/ftp-device.model';
+import { CompanyEmailChannel } from '../channels/models/company-email-channel.model';
+import { CompanyWhatsappChannel } from '../channels/models/company-whatsapp-channel.model';
+import { CompanyTelegramChannel } from '../channels/models/company-telegram-channel.model';
 import { AuditModule } from '../audit/audit.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PlansService } from './plans.service';
@@ -26,6 +29,9 @@ import { PlansController } from './plans.controller';
       Users,
       Document,
       FtpDevice,
+      CompanyEmailChannel,
+      CompanyWhatsappChannel,
+      CompanyTelegramChannel,
     ]),
     AuditModule,
     NotificationsModule,
