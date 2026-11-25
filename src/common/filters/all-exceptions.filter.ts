@@ -20,11 +20,19 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let message: any = 'Internal server error';
+    let code: string | undefined;
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
       const res = exception.getResponse();
-      message = typeof res === 'string' ? res : (res as any).message || res;
+      if (typeof res === 'string') {
+        message = res;
+      } else if (res && typeof res === 'object') {
+        message = (res as any).message || res;
+        if (typeof (res as any).code === 'string') {
+          code = (res as any).code;
+        }
+      }
     } else if (exception instanceof UniqueConstraintError) {
       status = HttpStatus.BAD_REQUEST;
       message = `El registro ya existe. Detalle: ${exception.errors.map((e) => e.message).join(', ')}`;
@@ -54,6 +62,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     response.status(status).json({
       statusCode: status,
+      ...(code ? { code } : {}),
       timestamp: new Date().toISOString(),
       path: request.url,
       message,
