@@ -21,6 +21,7 @@ import {
   getCurrentBillingPeriod,
   resolveCompanyEffectiveLimits,
 } from '../helpers/quota-calculator.helper';
+import { ExchangeRateService } from './exchange-rate.service';
 
 /**
  * Servicio especializado en el cálculo agregado y sin N+1 del resumen de cuotas
@@ -44,6 +45,8 @@ export class CompanyQuotaSummaryService {
     @Optional()
     @InjectModel(CompanyTelegramChannel)
     private readonly telegramChannelModel?: typeof CompanyTelegramChannel,
+    @Optional()
+    private readonly exchangeRateService?: ExchangeRateService,
   ) {}
 
   /**
@@ -73,6 +76,12 @@ export class CompanyQuotaSummaryService {
 
     const companyIds = companies.map((c) => c.id);
     const period = getCurrentBillingPeriod();
+    const exchangeConfig = this.exchangeRateService
+      ? await this.exchangeRateService.getConfig().catch(() => null)
+      : null;
+    const usdRate = Number(exchangeConfig?.usdRate || process.env.USD_EXCHANGE_RATE || 1250);
+    const roundPrices =
+      exchangeConfig?.roundPrices !== undefined ? Boolean(exchangeConfig.roundPrices) : true;
 
     const [
       userCountsRaw,
@@ -210,6 +219,15 @@ export class CompanyQuotaSummaryService {
       const additionalCostArs = Number(
         (aiStats.docsProcessed * unitPriceArs).toFixed(2),
       );
+      const rawPlanPrice = Number(company.plan?.priceMonthly || 0);
+      const planCurrency = (company.plan?.currency ||
+        (rawPlanPrice === 0 ? 'ARS' : 'USD')) as 'ARS' | 'USD';
+      const convertedPlanPrice =
+        planCurrency === 'USD' ? rawPlanPrice * usdRate : rawPlanPrice;
+      const planBasePriceArs = roundPrices
+        ? Math.ceil(convertedPlanPrice)
+        : Number(convertedPlanPrice.toFixed(2));
+      const totalToChargeArs = Number((planBasePriceArs + additionalCostArs).toFixed(2));
 
       result.set(company.id, {
         companyId: company.id,
@@ -239,6 +257,11 @@ export class CompanyQuotaSummaryService {
           processedCount: aiStats.docsProcessed,
           unitPriceArs,
           additionalCostArs,
+          planBasePriceArs,
+          planOriginalPrice: rawPlanPrice,
+          planCurrency,
+          exchangeRateApplied: usdRate,
+          totalToChargeArs,
         },
         activeDocumentsCount: docStats.count,
         activeFtpDevicesCount: ftpDeviceCountMap.get(company.id) ?? 0,

@@ -270,6 +270,8 @@ describe('TenantQuotasService', () => {
         name: 'Pro',
         slug: 'pro',
         badgeColor: 'primary',
+        priceMonthly: 50000,
+        currency: 'ARS',
         maxUsers: 10,
         maxDocuments: 1000,
         maxStorageMb: 1024,
@@ -307,6 +309,8 @@ describe('TenantQuotasService', () => {
         processedCount: 18,
         unitPriceArs: 150,
         additionalCostArs: 2700,
+        planBasePriceArs: 50000,
+        totalToChargeArs: 52700,
       }),
     );
   });

@@ -233,7 +233,7 @@ describe('CompaniesService', () => {
       NotificationPreference: makeModelMock('NotificationPreference'),
       PushSubscription: makeModelMock('PushSubscription'),
       UserPermission: makeModelMock('UserPermission'),
-      Audit: makeModelMock('Audit'),
+      AuditLog: makeModelMock('AuditLog'),
       SecurityLoginEvent: makeModelMock('SecurityLoginEvent'),
       SecurityErrorLog: makeModelMock('SecurityErrorLog'),
       SecurityIpIntelligence: makeModelMock('SecurityIpIntelligence'),
@@ -280,7 +280,7 @@ describe('CompaniesService', () => {
     expect(callOrder.indexOf('destroy:Document')).toBeLessThan(
       callOrder.indexOf('destroy:Users'),
     );
-    expect(callOrder.indexOf('update:Audit')).toBeLessThan(
+    expect(callOrder.indexOf('destroy:AuditLog')).toBeLessThan(
       callOrder.indexOf('destroy:Users'),
     );
     expect(ftpDevicesServiceMock.deleteExternalVirtualUsers).toHaveBeenCalledWith([

@@ -139,16 +139,14 @@ export async function purgeCompanyRelationsInTransaction(
     }
   }
 
-  // 5. Auditoría (incluye FK user_id con ON DELETE NO ACTION)
-  const AuditModel = models['Audit'];
+  // 5. Auditoría (modelo AuditLog -> tabla `audits`, incluye FK user_id con ON DELETE NO ACTION)
+  const AuditModel = models['AuditLog'] || models['Audit'];
   if (AuditModel) {
-    await AuditModel.destroy({ where: { companyId }, transaction });
+    const auditOr: any[] = [{ companyId }];
     if (userIds.length > 0) {
-      await AuditModel.update(
-        { userId: null },
-        { where: { userId: { [Op.in]: userIds } }, transaction },
-      );
+      auditOr.push({ userId: { [Op.in]: userIds } });
     }
+    await AuditModel.destroy({ where: { [Op.or]: auditOr }, transaction });
   }
 
   // 6. Desvincular logs de seguridad (preserving historical logs without dangling company/user IDs)

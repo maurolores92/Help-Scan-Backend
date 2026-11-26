@@ -29,6 +29,11 @@ export interface DocumentProcessingBillingSummary {
   processedCount: number;
   unitPriceArs: number;
   additionalCostArs: number;
+  planBasePriceArs?: number;
+  planOriginalPrice?: number;
+  planCurrency?: 'ARS' | 'USD';
+  exchangeRateApplied?: number;
+  totalToChargeArs?: number;
 }
 
 export interface CompanyChannelIntegrationStatus {
