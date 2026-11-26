@@ -194,4 +194,100 @@ describe('CompaniesService', () => {
       expect.objectContaining({ where: { companyId: 8 } }),
     );
   });
+
+  it('debe eliminar en cascada segura ftp_devices, canales, documentos, clientes, usuarios y roles antes de destruir la compañía', async () => {
+    const callOrder: string[] = [];
+    const makeModelMock = (name: string, rows: any[] = []) => ({
+      findAll: jest.fn().mockResolvedValue(rows),
+      destroy: jest.fn().mockImplementation(async () => {
+        callOrder.push(`destroy:${name}`);
+        return rows.length || 1;
+      }),
+      update: jest.fn().mockImplementation(async () => {
+        callOrder.push(`update:${name}`);
+        return [1];
+      }),
+    });
+
+    sequelizeMock.models = {
+      Users: makeModelMock('Users', [{ id: 10 }, { id: 11 }]),
+      Role: makeModelMock('Role', [{ id: 20 }]),
+      Document: makeModelMock('Document', [{ id: 30 }]),
+      FtpDevice: makeModelMock('FtpDevice', [{ id: 40, username: 'hp_scanner_2' }]),
+      EmailMessage: makeModelMock('EmailMessage'),
+      WhatsappMessage: makeModelMock('WhatsappMessage'),
+      TelegramMessage: makeModelMock('TelegramMessage'),
+      CompanyEmailChannel: makeModelMock('CompanyEmailChannel'),
+      CompanyWhatsappChannel: makeModelMock('CompanyWhatsappChannel'),
+      CompanyTelegramChannel: makeModelMock('CompanyTelegramChannel'),
+      DocumentLink: makeModelMock('DocumentLink'),
+      DocumentFormRecord: makeModelMock('DocumentFormRecord'),
+      DocumentTypeForm: makeModelMock('DocumentTypeForm'),
+      Client: makeModelMock('Client'),
+      CompanyMonthlyUsage: makeModelMock('CompanyMonthlyUsage'),
+      Notification: makeModelMock('Notification'),
+      NotificationPreference: makeModelMock('NotificationPreference'),
+      PushSubscription: makeModelMock('PushSubscription'),
+      UserPermission: makeModelMock('UserPermission'),
+      Audit: makeModelMock('Audit'),
+      SecurityLoginEvent: makeModelMock('SecurityLoginEvent'),
+      SecurityErrorLog: makeModelMock('SecurityErrorLog'),
+      SecurityIpIntelligence: makeModelMock('SecurityIpIntelligence'),
+      RolePermission: makeModelMock('RolePermission'),
+    };
+
+    const ftpDevicesServiceMock: any = {
+      deleteExternalVirtualUsers: jest.fn().mockResolvedValue(undefined),
+    };
+    const mockCompany = {
+      id: 2,
+      name: 'MauroDEV',
+      slug: 'maurodev',
+      status: CompanyStatus.SUSPENDED,
+      destroy: jest.fn().mockImplementation(async () => {
+        callOrder.push('destroy:Company');
+      }),
+      toJSON: () => ({ id: 2, name: 'MauroDEV', status: CompanyStatus.SUSPENDED }),
+    };
+
+    companyModelMock.findByPk.mockResolvedValueOnce(mockCompany);
+    const serviceWithFtp = new CompaniesService(
+      companyModelMock,
+      sequelizeMock,
+      auditServiceMock,
+      notificationsServiceMock,
+      plansServiceMock,
+      tenantQuotasServiceMock,
+      ftpDevicesServiceMock,
+    );
+
+    const res = await serviceWithFtp.remove(2, 1);
+
+    expect(res).toEqual({
+      success: true,
+      message: "Compañía 'MauroDEV' eliminada correctamente",
+    });
+    expect(callOrder.indexOf('destroy:FtpDevice')).toBeLessThan(
+      callOrder.indexOf('destroy:Company'),
+    );
+    expect(callOrder.indexOf('destroy:Users')).toBeLessThan(
+      callOrder.indexOf('destroy:Company'),
+    );
+    expect(callOrder.indexOf('destroy:Document')).toBeLessThan(
+      callOrder.indexOf('destroy:Users'),
+    );
+    expect(callOrder.indexOf('update:Audit')).toBeLessThan(
+      callOrder.indexOf('destroy:Users'),
+    );
+    expect(ftpDevicesServiceMock.deleteExternalVirtualUsers).toHaveBeenCalledWith([
+      'hp_scanner_2',
+    ]);
+    expect(auditServiceMock.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entity: 'Company',
+        entityId: 2,
+        companyId: null,
+      }),
+    );
+  });
 });

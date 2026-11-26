@@ -502,6 +502,13 @@ export class FtpDevicesService {
     }
   }
 
+  async deleteExternalVirtualUsers(usernames: string[]): Promise<void> {
+    for (const username of usernames) {
+      if (!username) continue;
+      await this.sftpGoClient.deleteVirtualUser(username).catch(() => undefined);
+    }
+  }
+
   private verifyWebhookSecret(
     headerSecret?: string,
     querySecret?: string,
