@@ -27,7 +27,10 @@ import {
   buildCompanySearchWhere,
   prepareInitialCompanyAdmin,
 } from './helpers/company-onboarding.helper';
-import { purgeCompanyRelationsInTransaction } from './helpers/company-cascade-delete.helper';
+import {
+  purgeCompanyDiskFiles,
+  purgeCompanyRelationsInTransaction,
+} from './helpers/company-cascade-delete.helper';
 
 @Injectable()
 export class CompaniesService {
@@ -370,16 +373,21 @@ export class CompaniesService {
     const transaction = await this.sequelize.transaction();
     try {
       const deletedData = company.toJSON();
-      const { ftpUsernames } = await purgeCompanyRelationsInTransaction(
-        this.sequelize,
-        id,
-        transaction,
-      );
+      const { ftpUsernames, documentPaths, userImagePaths } =
+        await purgeCompanyRelationsInTransaction(this.sequelize, id, transaction);
       await company.destroy({ transaction });
       await transaction.commit();
 
       if (ftpUsernames.length > 0) {
         await this.ftpDevicesService?.deleteExternalVirtualUsers(ftpUsernames);
+      }
+
+      if (process.env.NODE_ENV !== 'test') {
+        purgeCompanyDiskFiles({
+          companyId: id,
+          documentPaths,
+          assetPaths: [company.logo, ...userImagePaths],
+        });
       }
 
       await this.auditService.log({
@@ -389,7 +397,7 @@ export class CompaniesService {
         companyId: null,
         userId: actorUserId,
         payload: deletedData,
-        description: `Se eliminó la compañía '${company.name}' y sus registros dependientes`,
+        description: `Se eliminó la compañía '${company.name}' junto con sus archivos en disco y registros dependientes`,
       });
 
       return { success: true, message: `Compañía '${company.name}' eliminada correctamente` };

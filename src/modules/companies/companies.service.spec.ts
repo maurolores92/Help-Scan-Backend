@@ -1,6 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/sequelize';
 import { BadRequestException } from '@nestjs/common';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { Sequelize } from 'sequelize-typescript';
 import { CompaniesService } from './companies.service';
 import { Company, CompanyStatus } from './company.model';
@@ -10,6 +13,7 @@ import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PlansService } from '../plans/plans.service';
 import { TenantQuotasService } from '../plans/services/tenant-quotas.service';
+import { purgeCompanyDiskFiles } from './helpers/company-cascade-delete.helper';
 
 describe('CompaniesService', () => {
   let service: CompaniesService;
@@ -289,5 +293,68 @@ describe('CompaniesService', () => {
         companyId: null,
       }),
     );
+  });
+
+  it('purgeCompanyDiskFiles elimina físicamente carpetas tenant, PDFs, imágenes, logos y avatares sin afectar otras empresas', () => {
+    const prevStorageRoot = process.env.STORAGE_ROOT_PATH;
+    const tempRoot = mkdtempSync(join(tmpdir(), 'hc-company-purge-'));
+    process.env.STORAGE_ROOT_PATH = tempRoot;
+
+    try {
+      const targetTenantVault = join(tempRoot, 'tenancy', 'company_2_maurodev', 'vault', '2026', '11');
+      const targetTenantImages = join(tempRoot, 'tenancy', 'company_2_maurodev', 'images');
+      const targetLegacyDir = join(tempRoot, 'tenancy', '2');
+      const otherTenantDir = join(tempRoot, 'tenancy', 'company_3_otra', 'vault');
+      const companiesLogosDir = join(tempRoot, 'companies');
+      const usersAvatarsDir = join(tempRoot, 'users');
+
+      for (const dir of [
+        targetTenantVault,
+        targetTenantImages,
+        targetLegacyDir,
+        otherTenantDir,
+        companiesLogosDir,
+        usersAvatarsDir,
+      ]) {
+        mkdirSync(dir, { recursive: true });
+      }
+
+      const pdfFile = join(targetTenantVault, 'factura.pdf');
+      const imgFile = join(targetTenantImages, 'comprobante.jpg');
+      const legacyFile = join(targetLegacyDir, 'old.pdf');
+      const logoFile = join(companiesLogosDir, 'logo-2.png');
+      const avatarFile = join(usersAvatarsDir, 'user-10.png');
+      const otherPdf = join(otherTenantDir, 'intacto.pdf');
+
+      for (const f of [pdfFile, imgFile, legacyFile, logoFile, avatarFile, otherPdf]) {
+        writeFileSync(f, 'test-content');
+      }
+
+      const result = purgeCompanyDiskFiles({
+        companyId: 2,
+        documentPaths: ['tenancy/company_2_maurodev/vault/2026/11/factura.pdf'],
+        assetPaths: [
+          '/api/images/companies/logo-2.png',
+          'users/user-10.png',
+          '../../outside-secret.txt',
+          null,
+        ],
+      });
+
+      expect(result.removedDirectories).toBeGreaterThanOrEqual(2);
+      expect(result.removedFiles).toBe(2);
+      expect(existsSync(join(tempRoot, 'tenancy', 'company_2_maurodev'))).toBe(false);
+      expect(existsSync(targetLegacyDir)).toBe(false);
+      expect(existsSync(logoFile)).toBe(false);
+      expect(existsSync(avatarFile)).toBe(false);
+      expect(existsSync(otherPdf)).toBe(true);
+    } finally {
+      if (prevStorageRoot === undefined) {
+        delete process.env.STORAGE_ROOT_PATH;
+      } else {
+        process.env.STORAGE_ROOT_PATH = prevStorageRoot;
+      }
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 });
