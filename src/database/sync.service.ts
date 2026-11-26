@@ -44,6 +44,9 @@ export class SyncService implements OnModuleInit {
       'CompanyTelegramChannel',
       'TelegramMessage',
       'DemoRequest',
+      'SecurityIpIntelligence',
+      'SecurityLoginEvent',
+      'SecurityErrorLog',
     ];
 
     if (isForceSync) {
@@ -309,6 +312,15 @@ export class SyncService implements OnModuleInit {
       { table: 'telegram_messages', name: 'idx_telegram_messages_external_id', column: 'external_message_id' },
       { table: 'demo_requests', name: 'idx_demo_requests_status', column: 'status' },
       { table: 'demo_requests', name: 'idx_demo_requests_created_at', column: 'created_at' },
+      { table: 'security_ip_intelligence', name: 'idx_security_ip_blocked', column: 'is_blocked' },
+      { table: 'security_ip_intelligence', name: 'idx_security_ip_last_seen', column: 'last_seen_at' },
+      { table: 'security_login_events', name: 'idx_security_login_ip', column: 'ip_address' },
+      { table: 'security_login_events', name: 'idx_security_login_event_type', column: 'event_type' },
+      { table: 'security_login_events', name: 'idx_security_login_created_at', column: 'created_at' },
+      { table: 'security_error_logs', name: 'idx_security_err_status', column: 'status_code' },
+      { table: 'security_error_logs', name: 'idx_security_err_source', column: 'source' },
+      { table: 'security_error_logs', name: 'idx_security_err_ip', column: 'ip_address' },
+      { table: 'security_error_logs', name: 'idx_security_err_created_at', column: 'created_at' },
     ];
 
     for (const idx of singleColumnIndexes) {

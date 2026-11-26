@@ -18,7 +18,16 @@ import { Plan } from '../plans/plan.model';
 import { Permission } from '../permissions/permission.model';
 import { Users, UserStatus } from '../users/users.model';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
+import { SecurityService } from '../security/services/security.service';
+import { SecurityLoginEventType } from '../security/models/security-login-event.model';
 import { ensureTenantDirectories } from '../../common/utils/storage-path.util';
+
+export interface AuthRequestMeta {
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  username?: string | null;
+  companyId?: number | null;
+}
 
 @Injectable()
 export class AuthService {
@@ -26,16 +35,34 @@ export class AuthService {
     private usersService: UsersService,
     private jwtService: JwtService,
     @Optional() private readonly notificationsGateway?: NotificationsGateway,
+    @Optional() private readonly securityService?: SecurityService,
   ) {}
 
-  async signIn(data: SignInAuthDto): Promise<any> {
+  async signIn(data: SignInAuthDto, meta?: AuthRequestMeta): Promise<any> {
     const user = await this.usersService.findOneByUsername(data.username);
 
     if (!user) {
+      void this.securityService?.recordLoginEvent({
+        eventType: SecurityLoginEventType.LOGIN_FAILED,
+        usernameAttempted: data.username,
+        ipAddress: meta?.ipAddress,
+        userAgent: meta?.userAgent,
+        failureReason: 'Usuario no encontrado',
+      });
       throw new UnauthorizedException('Usuario no encontrado');
     }
 
     if (user.status === 'INACTIVE' || user.status === 'SUSPENDED') {
+      void this.securityService?.recordLoginEvent({
+        eventType: SecurityLoginEventType.LOGIN_FAILED,
+        usernameAttempted: data.username,
+        userId: user.id,
+        companyId: user.companyId ?? null,
+        userRole: user.role,
+        ipAddress: meta?.ipAddress,
+        userAgent: meta?.userAgent,
+        failureReason: 'Cuenta inactiva o suspendida',
+      });
       throw new UnauthorizedException(
         'La cuenta se encuentra inactiva o suspendida',
       );
@@ -52,6 +79,16 @@ export class AuthService {
     if (user.companyId) {
       const company = await Company.findByPk(user.companyId);
       if (!company) {
+        void this.securityService?.recordLoginEvent({
+          eventType: SecurityLoginEventType.LOGIN_FAILED,
+          usernameAttempted: data.username,
+          userId: user.id,
+          companyId: user.companyId ?? null,
+          userRole: user.role,
+          ipAddress: meta?.ipAddress,
+          userAgent: meta?.userAgent,
+          failureReason: 'Compañía asignada inexistente',
+        });
         throw new UnauthorizedException('La compañía asignada no existe');
       }
       if (company.trialEndsAt && new Date(company.trialEndsAt) <= new Date()) {
@@ -60,12 +97,32 @@ export class AuthService {
           { status: UserStatus.INACTIVE },
           { where: { companyId: company.id } },
         );
+        void this.securityService?.recordLoginEvent({
+          eventType: SecurityLoginEventType.LOGIN_FAILED,
+          usernameAttempted: data.username,
+          userId: user.id,
+          companyId: user.companyId ?? null,
+          userRole: user.role,
+          ipAddress: meta?.ipAddress,
+          userAgent: meta?.userAgent,
+          failureReason: 'Período de prueba vencido',
+        });
         throw new UnauthorizedException(
           'El período de prueba de 6 días para tu empresa ha vencido. Contacta a HelpCopies para activar tu cuenta.',
         );
       }
 
       if (company.status === CompanyStatus.INACTIVE || company.status === CompanyStatus.SUSPENDED) {
+        void this.securityService?.recordLoginEvent({
+          eventType: SecurityLoginEventType.LOGIN_FAILED,
+          usernameAttempted: data.username,
+          userId: user.id,
+          companyId: user.companyId ?? null,
+          userRole: user.role,
+          ipAddress: meta?.ipAddress,
+          userAgent: meta?.userAgent,
+          failureReason: 'Compañía inactiva o suspendida',
+        });
         throw new UnauthorizedException(
           'El acceso está temporalmente inhabilitado porque la compañía se encuentra inactiva o suspendida',
         );
@@ -81,6 +138,16 @@ export class AuthService {
 
     const compare = await bcrypt.compare(data.password, user.password);
     if (!compare) {
+      void this.securityService?.recordLoginEvent({
+        eventType: SecurityLoginEventType.LOGIN_FAILED,
+        usernameAttempted: data.username,
+        userId: user.id,
+        companyId: user.companyId ?? null,
+        userRole: user.role,
+        ipAddress: meta?.ipAddress,
+        userAgent: meta?.userAgent,
+        failureReason: 'Contraseña incorrecta',
+      });
       throw new UnauthorizedException('Contraseña incorrecta');
     }
 
@@ -97,6 +164,16 @@ export class AuthService {
       (currentSessionExpiresAt === null || currentSessionExpiresAt > Date.now());
 
     if (hasActiveSession && !data.forceTakeover) {
+      void this.securityService?.recordLoginEvent({
+        eventType: SecurityLoginEventType.LOGIN_BLOCKED_ACTIVE_SESSION,
+        usernameAttempted: user.username || data.username,
+        userId: user.id,
+        companyId: user.companyId ?? null,
+        userRole: user.role,
+        ipAddress: meta?.ipAddress,
+        userAgent: meta?.userAgent,
+        failureReason: 'ACTIVE_SESSION_EXISTS',
+      });
       throw new ConflictException({
         code: 'ACTIVE_SESSION_EXISTS',
         message:
@@ -116,6 +193,20 @@ export class AuthService {
     }
 
     this.notificationsGateway?.emitSessionReplaced?.(user.id, sessionId);
+
+    void this.securityService?.recordLoginEvent({
+      eventType:
+        hasActiveSession && data.forceTakeover
+          ? SecurityLoginEventType.SESSION_FORCED_TAKEOVER
+          : SecurityLoginEventType.LOGIN_SUCCESS,
+      usernameAttempted: user.username || data.username,
+      userId: user.id,
+      companyId: user.companyId ?? null,
+      userRole: user.role,
+      ipAddress: meta?.ipAddress,
+      userAgent: meta?.userAgent,
+      sessionId,
+    });
 
     const payload = {
       id: user.id,
@@ -291,7 +382,10 @@ export class AuthService {
     }
   }
 
-  async logout(userId: number): Promise<{ success: boolean }> {
+  async logout(
+    userId: number,
+    meta?: AuthRequestMeta,
+  ): Promise<{ success: boolean }> {
     if (!userId || isNaN(userId)) {
       return { success: false };
     }
@@ -302,6 +396,14 @@ export class AuthService {
       },
       { where: { id: userId } },
     );
+    void this.securityService?.recordLoginEvent({
+      eventType: SecurityLoginEventType.LOGOUT,
+      userId,
+      usernameAttempted: meta?.username || null,
+      companyId: meta?.companyId ?? null,
+      ipAddress: meta?.ipAddress,
+      userAgent: meta?.userAgent,
+    });
     return { success: true };
   }
 

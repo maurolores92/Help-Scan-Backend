@@ -54,6 +54,7 @@ export const EntityLabel: Record<string, string> = {
   EmailMessage: 'correo electrónico recibido',
   DemoRequest: 'solicitud de demostración',
   AuditLog: 'registro de auditoría',
+  SecurityIpIntelligence: 'inteligencia de IP y bloqueo',
 };
 
 export function buildAuditDescription(

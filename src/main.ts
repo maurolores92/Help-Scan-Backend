@@ -15,6 +15,7 @@ async function bootstrap() {
     rawBody: true,
   });
 
+  app.set('trust proxy', true);
   app.setGlobalPrefix('api');
 
   // Filtro de seguridad para acceso a imágenes: bloquea bóveda, buzón y archivos cifrados

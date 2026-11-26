@@ -23,6 +23,8 @@ import { FtpDevicesModule } from './ftp-devices/ftp-devices.module';
 import { ChannelsModule } from './channels/channels.module';
 import { ClientsModule } from './clients/clients.module';
 import { DemoRequestsModule } from './demo-requests/demo-requests.module';
+import { SecurityModule } from './security/security.module';
+import { SecurityTrafficMiddleware } from './security/middleware/security-traffic.middleware';
 
 @Module({
   imports: [
@@ -35,6 +37,7 @@ import { DemoRequestsModule } from './demo-requests/demo-requests.module';
     DatabaseModule,
     AuditModule,
     NotificationsModule,
+    SecurityModule,
     PermissionsModule,
     RoleModule,
     PlansModule,
@@ -58,6 +61,6 @@ import { DemoRequestsModule } from './demo-requests/demo-requests.module';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    // Configuración de middlewares globales o tenant
+    consumer.apply(SecurityTrafficMiddleware).forRoutes('*');
   }
 }

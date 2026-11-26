@@ -78,6 +78,15 @@ export class NotificationsGateway
         client.data.companyId = payload.companyId;
       }
 
+      // Room exclusivo de Super Admin para monitoreo de seguridad en vivo
+      if (
+        payload.role === 'superadmin' ||
+        String(payload.username || '').toLowerCase() === 'superadmin'
+      ) {
+        client.join('superadmin');
+        client.data.isSuperAdmin = true;
+      }
+
       this.logger.log(`User ${userId} connected → room ${userRoom}`);
     } catch (error: any) {
       this.logger.warn(
@@ -118,6 +127,12 @@ export class NotificationsGateway
       return;
     }
     this.server.to(`company-${companyId}`).emit(event, data);
+  }
+
+  /** Emite un evento en tiempo real exclusivamente a los Super Admins conectados */
+  emitToSuperAdmins(event: string, data: any): void {
+    if (!this.server) return;
+    this.server.to('superadmin').emit(event, data);
   }
 
   /** Emite un evento a todos los clientes conectados en el namespace */

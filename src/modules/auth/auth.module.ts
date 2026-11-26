@@ -7,6 +7,7 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { UsersModule } from '../users/users.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { SecurityModule } from '../security/security.module';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { resolveJwtSecret } from '../../config/env-resolver';
 
@@ -15,6 +16,7 @@ import { resolveJwtSecret } from '../../config/env-resolver';
     ConfigModule,
     UsersModule,
     NotificationsModule,
+    SecurityModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [],

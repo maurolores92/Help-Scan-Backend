@@ -16,6 +16,7 @@ import { GetUser } from './decorators/get-user.decorator';
 import { RegisterDto } from '../users/dto/register.dto';
 import { RegisterTrialDto } from './dto/register-trial.dto';
 import { assertPlatformSuperAdmin } from '../../common/utils/tenant-scope.util';
+import { extractClientIp } from '../security/helpers/security-request.helper';
 
 @Controller('auth')
 export class AuthController {
@@ -30,15 +31,23 @@ export class AuthController {
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  async signIn(@Body() signInDto: SignInAuthDto) {
-    return await this.authService.signIn(signInDto);
+  async signIn(@Body() signInDto: SignInAuthDto, @Req() req: Request) {
+    return await this.authService.signIn(signInDto, {
+      ipAddress: extractClientIp(req),
+      userAgent: req.headers['user-agent'] || null,
+    });
   }
 
   @Auth()
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  async logout(@GetUser() user: any) {
-    return await this.authService.logout(Number(user?.id));
+  async logout(@GetUser() user: any, @Req() req: Request) {
+    return await this.authService.logout(Number(user?.id), {
+      ipAddress: extractClientIp(req),
+      userAgent: req.headers['user-agent'] || null,
+      username: user?.username || null,
+      companyId: user?.companyId ?? null,
+    });
   }
 
   /**
