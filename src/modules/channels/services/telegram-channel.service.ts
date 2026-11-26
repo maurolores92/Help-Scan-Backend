@@ -37,6 +37,11 @@ import {
   encryptFtpSecret,
 } from '../../../common/utils/vault-crypto.util';
 import { isPlatformSuperAdmin } from '../../../common/utils/tenant-scope.util';
+import { Users, UserStatus } from '../../users/users.model';
+import {
+  resolveChannelOwnerContext,
+  resolveInboxFilterUserId,
+} from '../helpers/channel-user-scope.helper';
 import { convertImageBufferToPdf } from '../helpers/email-pdf-synthesizer.helper';
 import {
   buildDuplicateNoticeMessage,
@@ -78,6 +83,9 @@ export class TelegramChannelService
     private readonly auditService: AuditService,
     private readonly notificationsService: NotificationsService,
     @Optional() private readonly gateway?: NotificationsGateway,
+    @Optional()
+    @InjectModel(Users)
+    private readonly usersModel?: typeof Users,
   ) {}
 
   onModuleInit(): void {
@@ -129,19 +137,28 @@ export class TelegramChannelService
           ? company.enabledModules
           : [];
 
+        let ownerActive = true;
+        if (this.usersModel && ch.userId) {
+          const owner = await this.usersModel.findByPk(ch.userId, {
+            attributes: ['id', 'status'],
+          });
+          ownerActive = Boolean(owner && owner.status === UserStatus.ACTIVE);
+        }
+
         if (
           company &&
           company.status === CompanyStatus.ACTIVE &&
-          modules.includes('telegram')
+          modules.includes('telegram') &&
+          ownerActive
         ) {
-          activeEligible.add(ch.companyId);
-          this.startPollingForCompany(ch.companyId);
+          activeEligible.add(ch.id);
+          this.startPollingForChannel(ch.id);
         }
       }
 
       for (const runningId of Array.from(this.pollingWorkers.keys())) {
         if (!activeEligible.has(runningId)) {
-          this.stopPollingForCompany(runningId);
+          this.stopPollingForChannel(runningId);
         }
       }
     } catch (err: any) {
@@ -156,8 +173,18 @@ export class TelegramChannelService
       clearInterval(this.reconcileTimer);
       this.reconcileTimer = null;
     }
-    for (const companyId of Array.from(this.pollingWorkers.keys())) {
-      this.stopPollingForCompany(companyId);
+    for (const channelId of Array.from(this.pollingWorkers.keys())) {
+      this.stopPollingForChannel(channelId);
+    }
+  }
+
+  async stopPollingForUser(userId: number): Promise<void> {
+    const channels = await this.telegramChannelModel.findAll({
+      where: { userId },
+      attributes: ['id'],
+    });
+    for (const ch of channels) {
+      this.stopPollingForChannel(ch.id);
     }
   }
 
@@ -179,10 +206,14 @@ export class TelegramChannelService
     return companyId;
   }
 
-  private toSafeChannelResponse(channel: CompanyTelegramChannel | null) {
+  private toSafeChannelResponse(
+    channel: CompanyTelegramChannel | null,
+    targetUserId?: number | null,
+  ) {
     if (!channel) {
       return {
         configured: false,
+        targetUserId: targetUserId ?? null,
         channel: null,
       };
     }
@@ -194,29 +225,42 @@ export class TelegramChannelService
 
     return {
       configured: true,
+      targetUserId: channel.userId ?? targetUserId ?? null,
       channel: {
         ...plain,
         hasBotToken,
-        isPollingActive: this.pollingWorkers.has(channel.companyId),
+        isPollingActive: this.pollingWorkers.has(channel.id),
       },
     };
   }
 
-  async getChannelConfig(user: any) {
-    const companyId = this.assertTenantUser(user);
+  async getChannelConfig(user: any, requestedUserId?: number | string | null) {
+    const owner = await resolveChannelOwnerContext(
+      user,
+      requestedUserId,
+      this.usersModel,
+    );
     const channel = await this.telegramChannelModel.findOne({
-      where: { companyId },
+      where: { companyId: owner.companyId, userId: owner.userId },
     });
-    return this.toSafeChannelResponse(channel);
+    return this.toSafeChannelResponse(channel, owner.userId);
   }
 
-  async testConnection(dto: TestTelegramConnectionDto, user: any) {
-    const companyId = this.assertTenantUser(user);
+  async testConnection(
+    dto: TestTelegramConnectionDto,
+    user: any,
+    requestedUserId?: number | string | null,
+  ) {
+    const owner = await resolveChannelOwnerContext(
+      user,
+      requestedUserId,
+      this.usersModel,
+    );
     let plainToken = dto.botToken?.trim() || '';
 
     if (!plainToken) {
       const existing = await this.telegramChannelModel.findOne({
-        where: { companyId },
+        where: { companyId: owner.companyId, userId: owner.userId },
       });
       if (!existing?.encryptedBotToken) {
         throw new BadRequestException(
@@ -229,7 +273,7 @@ export class TelegramChannelService
     try {
       const info = await this.botClient.getMe(plainToken);
       const existing = await this.telegramChannelModel.findOne({
-        where: { companyId },
+        where: { companyId: owner.companyId, userId: owner.userId },
       });
       if (existing) {
         await existing.update({
@@ -247,10 +291,18 @@ export class TelegramChannelService
     }
   }
 
-  async upsertChannelConfig(dto: UpsertTelegramChannelDto, user: any) {
-    const companyId = this.assertTenantUser(user);
+  async upsertChannelConfig(
+    dto: UpsertTelegramChannelDto,
+    user: any,
+    requestedUserId?: number | string | null,
+  ) {
+    const owner = await resolveChannelOwnerContext(
+      user,
+      requestedUserId,
+      this.usersModel,
+    );
     const existing = await this.telegramChannelModel.findOne({
-      where: { companyId },
+      where: { companyId: owner.companyId, userId: owner.userId },
     });
 
     let plainToken = dto.botToken?.trim() || '';
@@ -264,14 +316,13 @@ export class TelegramChannelService
         .digest('hex');
 
       const collision = await this.telegramChannelModel.findOne({
-        where: {
-          botTokenHash,
-          companyId: { [Op.ne]: companyId },
-        },
+        where: existing
+          ? { botTokenHash, id: { [Op.ne]: existing.id } }
+          : { botTokenHash },
       });
       if (collision) {
         throw new BadRequestException(
-          'Este Bot Token ya está vinculado a otra compañía de la plataforma.',
+          'Este Bot Token ya está vinculado a otro canal o usuario en la plataforma.',
         );
       }
 
@@ -313,7 +364,8 @@ export class TelegramChannelService
         : existing?.isActive ?? true;
 
     const payload = {
-      companyId,
+      companyId: owner.companyId,
+      userId: owner.userId,
       encryptedBotToken,
       botTokenHash,
       botUsername,
@@ -347,70 +399,75 @@ export class TelegramChannelService
     }
 
     // Reiniciar o detener polling en vivo según configuración
-    this.stopPollingForCompany(companyId);
+    this.stopPollingForChannel(saved.id);
     if (saved.isActive) {
-      this.startPollingForCompany(companyId);
+      this.startPollingForChannel(saved.id);
     }
 
     await this.auditService.log({
       action: existing ? AuditAction.UPDATE : AuditAction.CREATE,
       entity: 'CompanyTelegramChannel',
       entityId: saved.id,
-      companyId,
-      userId: user.id,
+      companyId: owner.companyId,
+      userId: owner.actorUserId,
       payload: {
+        targetUserId: owner.userId,
         botUsername: saved.botUsername,
         senderPolicy: saved.senderPolicy,
         isActive: saved.isActive,
       },
-      description: `${existing ? 'Actualizó' : 'Configuró'} el bot de Telegram (@${saved.botUsername})`,
+      description: `${existing ? 'Actualizó' : 'Configuró'} el bot de Telegram (@${saved.botUsername}) para usuario #${owner.userId}`,
     });
 
     await this.notificationsService.dispatch({
       type: 'channel.telegram_configured',
       title: '✈️ Bot de Telegram Configurado',
       body: `Se conectó el bot @${saved.botUsername} para recepción automática de comprobantes.`,
-      companyId,
-      actorUser: { id: user.id },
-      extraData: { channelId: saved.id, link: '/channels' },
+      companyId: owner.companyId,
+      actorUser: { id: owner.actorUserId },
+      extraData: {
+        channelId: saved.id,
+        userId: owner.userId,
+        link: '/channels',
+      },
     });
 
     return {
       message: 'Configuración de Telegram Bot guardada correctamente',
-      ...this.toSafeChannelResponse(saved),
+      ...this.toSafeChannelResponse(saved, owner.userId),
     };
   }
 
-  private startPollingForCompany(companyId: number): void {
-    if (this.pollingWorkers.has(companyId)) return;
+  private startPollingForChannel(channelId: number): void {
+    if (this.pollingWorkers.has(channelId)) return;
 
     const worker: PollingWorkerState = {
       abortController: new AbortController(),
       stopped: false,
     };
-    this.pollingWorkers.set(companyId, worker);
+    this.pollingWorkers.set(channelId, worker);
 
     this.logger.log(
-      `✈️ [Telegram] Iniciando escucha Long Polling para compañía #${companyId}`,
+      `✈️ [Telegram] Iniciando escucha Long Polling para canal #${channelId}`,
     );
 
-    this.runPollingLoop(companyId, worker).catch((err) => {
+    this.runPollingLoop(channelId, worker).catch((err) => {
       this.logger.warn(
-        `[Telegram company_${companyId}] Loop detenido: ${err?.message}`,
+        `[Telegram channel_${channelId}] Loop detenido: ${err?.message}`,
       );
     });
   }
 
-  private stopPollingForCompany(companyId: number): void {
-    const worker = this.pollingWorkers.get(companyId);
+  private stopPollingForChannel(channelId: number): void {
+    const worker = this.pollingWorkers.get(channelId);
     if (!worker) return;
     worker.stopped = true;
     worker.abortController.abort();
-    this.pollingWorkers.delete(companyId);
+    this.pollingWorkers.delete(channelId);
   }
 
   private async runPollingLoop(
-    companyId: number,
+    channelId: number,
     worker: PollingWorkerState,
   ): Promise<void> {
     let errorStreak = 0;
@@ -418,12 +475,20 @@ export class TelegramChannelService
 
     while (!worker.stopped) {
       try {
-        const channel = await this.telegramChannelModel.findOne({
-          where: { companyId },
-        });
+        const channel = await this.telegramChannelModel.findByPk(channelId);
         if (!channel || !channel.isActive) {
-          this.stopPollingForCompany(companyId);
+          this.stopPollingForChannel(channelId);
           return;
+        }
+
+        if (this.usersModel && channel.userId) {
+          const ownerUser = await this.usersModel.findByPk(channel.userId, {
+            attributes: ['id', 'status'],
+          });
+          if (!ownerUser || ownerUser.status !== UserStatus.ACTIVE) {
+            this.stopPollingForChannel(channelId);
+            return;
+          }
         }
 
         const token = decryptFtpSecret(channel.encryptedBotToken);
@@ -456,7 +521,7 @@ export class TelegramChannelService
                 upd.message,
               ).catch((msgErr) => {
                 this.logger.warn(
-                  `[Telegram company_${companyId}] Error procesando mensaje: ${msgErr?.message}`,
+                  `[Telegram channel_${channelId}] Error procesando mensaje: ${msgErr?.message}`,
                 );
               });
             }
@@ -473,7 +538,7 @@ export class TelegramChannelService
         errorStreak++;
         const backoffMs = Math.min(30000, errorStreak * 3000);
         this.logger.warn(
-          `[Telegram company_${companyId}] Error de polling (reintento en ${backoffMs}ms): ${err?.message}`,
+          `[Telegram channel_${channelId}] Error de polling (reintento en ${backoffMs}ms): ${err?.message}`,
         );
         await new Promise((resolve) => setTimeout(resolve, backoffMs));
       }
@@ -486,13 +551,14 @@ export class TelegramChannelService
     msg: any,
   ): Promise<void> {
     const companyId = channel.companyId;
+    const ownerUserId = channel.userId ?? null;
     const chatId = String(msg?.chat?.id ?? '').trim();
     const messageId = String(msg?.message_id ?? '').trim();
     if (!chatId || !messageId) return;
 
     const externalMessageId = `${chatId}:${messageId}`;
     const alreadyExists = await this.telegramMessageModel.findOne({
-      where: { companyId, externalMessageId },
+      where: { companyId, channelId: channel.id, externalMessageId },
       attributes: ['id'],
     });
     if (alreadyExists) return;
@@ -569,6 +635,7 @@ export class TelegramChannelService
         await this.telegramMessageModel.create({
           companyId,
           channelId: channel.id,
+          userId: ownerUserId,
           externalMessageId,
           chatId,
           senderUsername,
@@ -597,6 +664,7 @@ export class TelegramChannelService
       await this.telegramMessageModel.create({
         companyId,
         channelId: channel.id,
+        userId: ownerUserId,
         externalMessageId,
         chatId,
         senderUsername,
@@ -614,6 +682,7 @@ export class TelegramChannelService
       await this.telegramMessageModel.create({
         companyId,
         channelId: channel.id,
+        userId: ownerUserId,
         externalMessageId,
         chatId,
         senderUsername,
@@ -639,6 +708,7 @@ export class TelegramChannelService
     const record = await this.telegramMessageModel.create({
       companyId,
       channelId: channel.id,
+      userId: ownerUserId,
       externalMessageId,
       chatId,
       senderUsername,
@@ -693,6 +763,7 @@ export class TelegramChannelService
           originalName: finalFileName,
           mimeType: 'application/pdf',
           source: DocumentSource.TELEGRAM,
+          actorUserId: ownerUserId ?? undefined,
           channelContextLabel: `Telegram ${senderName || (senderUsername ? `@${senderUsername}` : chatId)}`,
         });
 
@@ -719,17 +790,33 @@ export class TelegramChannelService
         extraData: {
           documentId: document.id,
           telegramMessageId: record.id,
+          channelId: channel.id,
+          userId: ownerUserId,
           link: '/telegram',
         },
       });
 
-      this.gateway?.emitToCompany(companyId, 'telegram:message_received', {
+      const okPayload = {
         companyId,
+        channelId: channel.id,
+        userId: ownerUserId,
         messageId: record.id,
         status: TelegramMessageStatus.PROCESSED,
         documentId: document.id,
         fileName: finalFileName,
-      });
+      };
+      if (ownerUserId) {
+        this.gateway?.emitEventToUser?.(
+          ownerUserId,
+          'telegram:message_received',
+          okPayload,
+        );
+      }
+      this.gateway?.emitToCompany(
+        companyId,
+        'telegram:message_received',
+        okPayload,
+      );
 
       if (channel.autoReplyConfirmation) {
         const ackText = isDuplicate
@@ -764,15 +851,34 @@ export class TelegramChannelService
         title: '⚠️ Error al procesar archivo de Telegram',
         body: `'${reportedFileName}': ${errMsg}`,
         companyId,
-        extraData: { telegramMessageId: record.id, link: '/telegram' },
+        extraData: {
+          telegramMessageId: record.id,
+          channelId: channel.id,
+          userId: ownerUserId,
+          link: '/telegram',
+        },
       });
 
-      this.gateway?.emitToCompany(companyId, 'telegram:message_received', {
+      const errPayload = {
         companyId,
+        channelId: channel.id,
+        userId: ownerUserId,
         messageId: record.id,
         status: TelegramMessageStatus.ERROR,
         fileName: reportedFileName,
-      });
+      };
+      if (ownerUserId) {
+        this.gateway?.emitEventToUser?.(
+          ownerUserId,
+          'telegram:message_received',
+          errPayload,
+        );
+      }
+      this.gateway?.emitToCompany(
+        companyId,
+        'telegram:message_received',
+        errPayload,
+      );
 
       if (channel.autoReplyConfirmation) {
         await this.botClient
@@ -796,9 +902,17 @@ export class TelegramChannelService
       });
       if (!msg) return;
 
-      const channel = await this.telegramChannelModel.findOne({
-        where: { companyId: doc.companyId, isActive: true },
-      });
+      const channel = msg.channelId
+        ? await this.telegramChannelModel.findOne({
+            where: { id: msg.channelId, isActive: true },
+          })
+        : await this.telegramChannelModel.findOne({
+            where: {
+              companyId: doc.companyId,
+              ...(msg.userId ? { userId: msg.userId } : {}),
+              isActive: true,
+            },
+          });
       if (!channel || !channel.autoReplyConfirmation) return;
 
       const botToken = decryptFtpSecret(channel.encryptedBotToken);
@@ -820,7 +934,13 @@ export class TelegramChannelService
     const limit = Number(query.limit || 25);
     const offset = (page - 1) * limit;
 
-    const where: any = { companyId };
+    const filterUserId = resolveInboxFilterUserId(user, query.userId);
+    const statsWhere: any = { companyId };
+    if (filterUserId !== undefined) {
+      statsWhere.userId = filterUserId;
+    }
+
+    const where: any = { ...statsWhere };
     if (query.status) {
       where.status = query.status;
     }
@@ -853,6 +973,12 @@ export class TelegramChannelService
             attributes: ['id', 'originalName', 'documentType', 'totalAmount', 'status'],
             required: false,
           },
+          {
+            model: Users,
+            as: 'user',
+            attributes: ['id', 'name', 'lastName', 'username', 'email'],
+            required: false,
+          },
         ],
         order: [
           ['receivedAt', 'DESC'],
@@ -861,18 +987,18 @@ export class TelegramChannelService
         limit,
         offset,
       }),
-      this.telegramMessageModel.count({ where: { companyId } }),
+      this.telegramMessageModel.count({ where: statsWhere }),
       this.telegramMessageModel.count({
-        where: { companyId, status: TelegramMessageStatus.PROCESSED },
+        where: { ...statsWhere, status: TelegramMessageStatus.PROCESSED },
       }),
       this.telegramMessageModel.count({
-        where: { companyId, status: TelegramMessageStatus.SKIPPED },
+        where: { ...statsWhere, status: TelegramMessageStatus.SKIPPED },
       }),
       this.telegramMessageModel.count({
-        where: { companyId, status: TelegramMessageStatus.REJECTED_SENDER },
+        where: { ...statsWhere, status: TelegramMessageStatus.REJECTED_SENDER },
       }),
       this.telegramMessageModel.count({
-        where: { companyId, status: TelegramMessageStatus.ERROR },
+        where: { ...statsWhere, status: TelegramMessageStatus.ERROR },
       }),
     ]);
 

@@ -7,6 +7,7 @@ import { WhatsappMessage } from './models/whatsapp-message.model';
 import { CompanyTelegramChannel } from './models/company-telegram-channel.model';
 import { TelegramMessage } from './models/telegram-message.model';
 import { Company } from '../companies/company.model';
+import { Users } from '../users/users.model';
 import { ChannelsController } from './channels.controller';
 import { EmailWebhookController } from './controllers/email-webhook.controller';
 import { ChannelsService } from './services/channels.service';
@@ -30,6 +31,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
       CompanyTelegramChannel,
       TelegramMessage,
       Company,
+      Users,
     ]),
     DocumentsModule,
     AuditModule,

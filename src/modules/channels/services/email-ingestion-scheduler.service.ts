@@ -1,19 +1,16 @@
-import {
-  Injectable,
-  Logger,
-  OnApplicationBootstrap,
-  OnModuleDestroy,
-  OnModuleInit,
-} from '@nestjs/common';
+import { Injectable, Logger, OnApplicationBootstrap, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/sequelize';
 import { CompanyEmailChannel } from '../models/company-email-channel.model';
 import { Company, CompanyStatus } from '../../companies/company.model';
+import { Users, UserStatus } from '../../users/users.model';
 import { ChannelsService } from './channels.service';
 import { ImapClientService } from './imap-client.service';
 import { decryptFtpSecret } from '../../../common/utils/vault-crypto.util';
 
 interface IdleWatcherEntry {
+  channelId: number;
+  userId: number | null;
   abortController: AbortController;
   stopped: boolean;
 }
@@ -33,11 +30,14 @@ export class EmailIngestionSchedulerService
     private readonly companyModel: typeof Company,
     private readonly channelsService: ChannelsService,
     private readonly imapClient: ImapClientService,
+    @Optional()
+    @InjectModel(Users)
+    private readonly usersModel?: typeof Users,
   ) {}
 
   onModuleInit(): void {
-    this.channelsService.registerChannelChangeListener((companyId) => {
-      this.restartIdleWatcher(companyId).catch(() => {});
+    this.channelsService.registerChannelChangeListener((channelId) => {
+      this.restartIdleWatcher(channelId).catch(() => {});
     });
   }
 
@@ -53,21 +53,51 @@ export class EmailIngestionSchedulerService
   }
 
   onModuleDestroy(): void {
-    for (const companyId of Array.from(this.idleWatchers.keys())) {
-      this.stopIdleWatcher(companyId);
+    for (const channelId of Array.from(this.idleWatchers.keys())) {
+      this.stopIdleWatcher(channelId);
     }
   }
 
-  private stopIdleWatcher(companyId: number): void {
-    const entry = this.idleWatchers.get(companyId);
+  stopIdleWatchersForUser(userId: number): void {
+    for (const [channelId, entry] of this.idleWatchers.entries()) {
+      if (entry.userId === userId) {
+        this.stopIdleWatcher(channelId);
+      }
+    }
+  }
+
+  private stopIdleWatcher(channelId: number): void {
+    const entry = this.idleWatchers.get(channelId);
     if (!entry) return;
     entry.stopped = true;
     entry.abortController.abort();
-    this.idleWatchers.delete(companyId);
+    this.idleWatchers.delete(channelId);
   }
 
-  private async restartIdleWatcher(companyId: number): Promise<void> {
-    this.stopIdleWatcher(companyId);
+  private async isChannelEligible(ch: CompanyEmailChannel): Promise<boolean> {
+    if (!ch || !ch.isActive || !ch.host || !ch.encryptedPassword) return false;
+    const company = await this.companyModel.findByPk(ch.companyId, {
+      attributes: ['id', 'status', 'enabledModules'],
+    });
+    const modules = Array.isArray(company?.enabledModules)
+      ? company.enabledModules
+      : [];
+    if (!company || company.status !== CompanyStatus.ACTIVE || !modules.includes('email')) {
+      return false;
+    }
+    if (ch.userId && this.usersModel) {
+      const owner = await this.usersModel.findByPk(ch.userId, {
+        attributes: ['id', 'status'],
+      });
+      if (!owner || owner.status === UserStatus.INACTIVE || owner.status === UserStatus.SUSPENDED) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private async restartIdleWatcher(channelId: number): Promise<void> {
+    this.stopIdleWatcher(channelId);
 
     if (
       process.env.NODE_ENV === 'test' ||
@@ -76,57 +106,51 @@ export class EmailIngestionSchedulerService
       return;
     }
 
-    const channel = await this.emailChannelModel.findOne({ where: { companyId } });
-    if (!channel || !channel.isActive || !channel.host || !channel.encryptedPassword) {
+    const channel = await this.emailChannelModel.findByPk(channelId);
+    if (!channel || !(await this.isChannelEligible(channel))) {
       return;
     }
 
-    const company = await this.companyModel.findByPk(companyId, {
-      attributes: ['id', 'status', 'enabledModules'],
-    });
-    const modules = Array.isArray(company?.enabledModules)
-      ? company.enabledModules
-      : [];
-    if (!company || company.status !== CompanyStatus.ACTIVE || !modules.includes('email')) {
-      return;
-    }
-
-    this.startIdleWatcher(companyId);
+    this.startIdleWatcher(channel.id, channel.userId ?? null);
   }
 
-  private startIdleWatcher(companyId: number): void {
-    if (this.idleWatchers.has(companyId)) return;
+  private startIdleWatcher(channelId: number, userId: number | null): void {
+    if (this.idleWatchers.has(channelId)) return;
 
     const entry: IdleWatcherEntry = {
+      channelId,
+      userId,
       abortController: new AbortController(),
       stopped: false,
     };
-    this.idleWatchers.set(companyId, entry);
+    this.idleWatchers.set(channelId, entry);
 
-    this.runIdleLoop(companyId, entry).catch((err) => {
+    this.runIdleLoop(channelId, entry).catch((err) => {
       this.logger.warn(
-        `[EmailIDLE company_${companyId}] Listener detenido: ${err?.message}`,
+        `[EmailIDLE channel_${channelId}] Listener detenido: ${err?.message}`,
       );
     });
   }
 
   private async runIdleLoop(
-    companyId: number,
+    channelId: number,
     entry: IdleWatcherEntry,
   ): Promise<void> {
     let errorStreak = 0;
 
     while (!entry.stopped) {
       try {
-        const channel = await this.emailChannelModel.findOne({ where: { companyId } });
+        const channel = await this.emailChannelModel.findByPk(channelId);
         if (!channel || !channel.isActive || !channel.host || !channel.encryptedPassword) {
-          this.stopIdleWatcher(companyId);
+          this.stopIdleWatcher(channelId);
           return;
         }
 
         const plainPassword = decryptFtpSecret(channel.encryptedPassword);
         // Al conectar IDLE, hacer una revisión inicial rápida por si entraron correos antes
-        await this.channelsService.syncCompanyEmailChannel(companyId, null).catch(() => {});
+        await this.channelsService
+          .syncCompanyEmailChannel(channel.companyId, channel.userId ?? null, channel.id)
+          .catch(() => {});
 
         errorStreak = 0;
         await this.imapClient.watchMailboxIdle(
@@ -139,7 +163,11 @@ export class EmailIngestionSchedulerService
             folder: channel.folder,
           },
           async () => {
-            await this.channelsService.syncCompanyEmailChannel(companyId, null);
+            await this.channelsService.syncCompanyEmailChannel(
+              channel.companyId,
+              channel.userId ?? null,
+              channel.id,
+            );
           },
           entry.abortController.signal,
         );
@@ -150,7 +178,7 @@ export class EmailIngestionSchedulerService
         errorStreak++;
         const backoffMs = Math.min(60000, errorStreak * 5000);
         this.logger.warn(
-          `[EmailIDLE company_${companyId}] Reconexión en ${backoffMs}ms: ${err?.message}`,
+          `[EmailIDLE channel_${channelId}] Reconexión en ${backoffMs}ms: ${err?.message}`,
         );
         await new Promise((resolve) => setTimeout(resolve, backoffMs));
       }
@@ -165,22 +193,15 @@ export class EmailIngestionSchedulerService
 
       const activeEligible = new Set<number>();
       for (const ch of channels) {
-        if (!ch.host || !ch.encryptedPassword) continue;
-        const company = await this.companyModel.findByPk(ch.companyId, {
-          attributes: ['id', 'status', 'enabledModules'],
-        });
-        const modules = Array.isArray(company?.enabledModules)
-          ? company.enabledModules
-          : [];
-        if (company && company.status === CompanyStatus.ACTIVE && modules.includes('email')) {
-          activeEligible.add(ch.companyId);
-          this.startIdleWatcher(ch.companyId);
+        if (await this.isChannelEligible(ch)) {
+          activeEligible.add(ch.id);
+          this.startIdleWatcher(ch.id, ch.userId ?? null);
         }
       }
 
-      for (const runningCompanyId of Array.from(this.idleWatchers.keys())) {
-        if (!activeEligible.has(runningCompanyId)) {
-          this.stopIdleWatcher(runningCompanyId);
+      for (const runningChannelId of Array.from(this.idleWatchers.keys())) {
+        if (!activeEligible.has(runningChannelId)) {
+          this.stopIdleWatcher(runningChannelId);
         }
       }
     } catch (err: any) {
@@ -213,15 +234,20 @@ export class EmailIngestionSchedulerService
       const nowMs = Date.now();
 
       for (const ch of activeChannels) {
+        if (!(await this.isChannelEligible(ch))) continue;
         const intervalMs = Math.max(1, Number(ch.syncIntervalMinutes || 5)) * 60 * 1000;
         const lastMs = ch.lastSyncAt ? new Date(ch.lastSyncAt).getTime() : 0;
 
         if (!ch.lastSyncAt || nowMs - lastMs >= intervalMs) {
           try {
-            await this.channelsService.syncCompanyEmailChannel(ch.companyId, null);
+            await this.channelsService.syncCompanyEmailChannel(
+              ch.companyId,
+              ch.userId ?? null,
+              ch.id,
+            );
           } catch (err: any) {
             this.logger.warn(
-              `[EmailScheduler] Falló sync automático compañía #${ch.companyId}: ${err?.message}`,
+              `[EmailScheduler] Falló sync automático canal #${ch.id}: ${err?.message}`,
             );
           }
         }

@@ -16,12 +16,15 @@ import {
   WhatsappSyncStatus,
 } from '../models/company-whatsapp-channel.model';
 import { Company, CompanyStatus } from '../../companies/company.model';
+import { Users, UserStatus } from '../../users/users.model';
 import { NotificationsGateway } from '../../notifications/notifications.gateway';
 import { getTenantWhatsappSessionPath } from '../../../common/utils/storage-path.util';
 import { extractWhatsappAttachmentInfo } from '../helpers/whatsapp-message.helper';
 
 export interface WhatsappRuntimeSnapshot {
+  channelId: number;
   companyId: number;
+  userId: number | null;
   connectionStatus: WhatsappConnectionStatus;
   qrDataUrl: string | null;
   connectedPhone: string | null;
@@ -30,11 +33,16 @@ export interface WhatsappRuntimeSnapshot {
 }
 
 type IncomingMessagesHandler = (
+  channelId: number,
   companyId: number,
+  userId: number | null,
   messages: any[],
 ) => Promise<void>;
 
 interface ActiveSessionEntry {
+  channelId: number;
+  companyId: number;
+  userId: number | null;
   sock: any;
   connectionStatus: WhatsappConnectionStatus;
   qrDataUrl: string | null;
@@ -63,6 +71,9 @@ export class WhatsappBaileysService
     @InjectModel(Company)
     private readonly companyModel: typeof Company,
     @Optional() private readonly gateway?: NotificationsGateway,
+    @Optional()
+    @InjectModel(Users)
+    private readonly usersModel?: typeof Users,
   ) {}
 
   registerIncomingMessagesHandler(handler: IncomingMessagesHandler): void {
@@ -93,7 +104,7 @@ export class WhatsappBaileysService
       });
 
       for (const ch of channels) {
-        const sessionDir = getTenantWhatsappSessionPath(ch.companyId);
+        const sessionDir = getTenantWhatsappSessionPath(ch.companyId, ch.userId);
         const credsPath = join(sessionDir, 'creds.json');
         if (!existsSync(credsPath)) {
           continue;
@@ -114,12 +125,25 @@ export class WhatsappBaileysService
           continue;
         }
 
+        if (ch.userId && this.usersModel) {
+          const owner = await this.usersModel.findByPk(ch.userId, {
+            attributes: ['id', 'status'],
+          });
+          if (
+            !owner ||
+            owner.status === UserStatus.INACTIVE ||
+            owner.status === UserStatus.SUSPENDED
+          ) {
+            continue;
+          }
+        }
+
         this.logger.log(
-          `📲 [WhatsApp] Restaurando sesión persistente para compañía #${ch.companyId}...`,
+          `📲 [WhatsApp] Restaurando sesión persistente canal #${ch.id} (empresa #${ch.companyId}, usuario #${ch.userId ?? 'general'})...`,
         );
-        this.startSession(ch.companyId).catch((err) => {
+        this.startSession(ch.id).catch((err) => {
           this.logger.warn(
-            `[WhatsApp] No se pudo restaurar sesión de compañía #${ch.companyId}: ${err?.message}`,
+            `[WhatsApp] No se pudo restaurar sesión canal #${ch.id}: ${err?.message}`,
           );
         });
       }
@@ -131,7 +155,7 @@ export class WhatsappBaileysService
   }
 
   async onModuleDestroy(): Promise<void> {
-    for (const [companyId, entry] of this.sessions.entries()) {
+    for (const [channelId, entry] of this.sessions.entries()) {
       entry.manuallyStopped = true;
       if (entry.reconnectTimer) {
         clearTimeout(entry.reconnectTimer);
@@ -139,18 +163,28 @@ export class WhatsappBaileysService
       try {
         entry.sock?.end?.(undefined);
       } catch {}
-      this.sessions.delete(companyId);
+      this.sessions.delete(channelId);
+    }
+  }
+
+  async stopSessionsForUser(userId: number, clearFiles = false): Promise<void> {
+    for (const [channelId, entry] of this.sessions.entries()) {
+      if (entry.userId === userId) {
+        await this.disconnectSession(channelId, clearFiles).catch(() => {});
+      }
     }
   }
 
   getRuntimeSnapshot(
-    companyId: number,
+    channelId: number,
     channel?: CompanyWhatsappChannel | null,
   ): WhatsappRuntimeSnapshot {
-    const active = this.sessions.get(companyId);
+    const active = channelId ? this.sessions.get(channelId) : undefined;
     if (active) {
       return {
-        companyId,
+        channelId: active.channelId,
+        companyId: active.companyId,
+        userId: active.userId,
         connectionStatus: active.connectionStatus,
         qrDataUrl: active.qrDataUrl,
         connectedPhone:
@@ -161,7 +195,9 @@ export class WhatsappBaileysService
     }
 
     return {
-      companyId,
+      channelId: channel?.id ?? channelId ?? 0,
+      companyId: channel?.companyId ?? 0,
+      userId: channel?.userId ?? null,
       connectionStatus:
         channel?.connectionStatus === WhatsappConnectionStatus.CONNECTED
           ? WhatsappConnectionStatus.DISCONNECTED
@@ -173,27 +209,50 @@ export class WhatsappBaileysService
     };
   }
 
-  private emitRealtimeState(companyId: number): void {
-    const snapshot = this.getRuntimeSnapshot(companyId);
-    this.gateway?.emitToCompany(companyId, 'whatsapp:status', snapshot);
+  private emitRealtimeState(
+    channelId: number,
+    fallbackCompanyId?: number,
+    fallbackUserId?: number | null,
+  ): void {
+    const entry = this.sessions.get(channelId);
+    const companyId = entry?.companyId || fallbackCompanyId || 0;
+    const userId = entry?.userId ?? fallbackUserId ?? null;
+    const snapshot = this.getRuntimeSnapshot(channelId);
+    if (!snapshot.companyId && companyId) snapshot.companyId = companyId;
+    if (!snapshot.userId && userId) snapshot.userId = userId;
+
+    if (userId) {
+      this.gateway?.emitEventToUser?.(userId, 'whatsapp:status', snapshot);
+    }
+    if (companyId) {
+      this.gateway?.emitToCompany(companyId, 'whatsapp:status', snapshot);
+    }
   }
 
-  async startSession(companyId: number): Promise<WhatsappRuntimeSnapshot> {
-    if (this.connectingLocks.has(companyId)) {
-      return this.getRuntimeSnapshot(companyId);
+  async startSession(channelId: number): Promise<WhatsappRuntimeSnapshot> {
+    if (this.connectingLocks.has(channelId)) {
+      return this.getRuntimeSnapshot(channelId);
     }
 
-    const existing = this.sessions.get(companyId);
+    const existing = this.sessions.get(channelId);
     if (
       existing &&
       (existing.connectionStatus === WhatsappConnectionStatus.CONNECTED ||
         existing.connectionStatus === WhatsappConnectionStatus.QR_READY ||
         existing.connectionStatus === WhatsappConnectionStatus.CONNECTING)
     ) {
-      return this.getRuntimeSnapshot(companyId);
+      return this.getRuntimeSnapshot(channelId);
     }
 
-    this.connectingLocks.add(companyId);
+    const channelRecord = await this.whatsappChannelModel.findByPk(channelId);
+    if (!channelRecord) {
+      return this.getRuntimeSnapshot(channelId);
+    }
+
+    const companyId = channelRecord.companyId;
+    const userId = channelRecord.userId ?? null;
+
+    this.connectingLocks.add(channelId);
     try {
       // Cerrar cualquier socket residual previo
       if (existing) {
@@ -202,7 +261,7 @@ export class WhatsappBaileysService
         try {
           existing.sock?.end?.(undefined);
         } catch {}
-        this.sessions.delete(companyId);
+        this.sessions.delete(channelId);
       }
 
       const baileys = await this.loadBaileys();
@@ -214,7 +273,7 @@ export class WhatsappBaileysService
         Browsers,
       } = baileys;
 
-      const sessionDir = getTenantWhatsappSessionPath(companyId);
+      const sessionDir = getTenantWhatsappSessionPath(companyId, userId);
       const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
 
       let waVersion: [number, number, number] | undefined;
@@ -237,6 +296,9 @@ export class WhatsappBaileysService
       });
 
       const entry: ActiveSessionEntry = {
+        channelId,
+        companyId,
+        userId,
         sock,
         connectionStatus: WhatsappConnectionStatus.CONNECTING,
         qrDataUrl: null,
@@ -247,7 +309,7 @@ export class WhatsappBaileysService
         reconnectAttempts: 0,
         manuallyStopped: false,
       };
-      this.sessions.set(companyId, entry);
+      this.sessions.set(channelId, entry);
 
       await this.whatsappChannelModel.update(
         {
@@ -255,16 +317,16 @@ export class WhatsappBaileysService
           lastSyncStatus: WhatsappSyncStatus.IDLE,
           lastSyncMessage: 'Iniciando sesión WhatsApp...',
         },
-        { where: { companyId } },
+        { where: { id: channelId } },
       );
-      this.emitRealtimeState(companyId);
+      this.emitRealtimeState(channelId, companyId, userId);
 
       sock.ev.on('creds.update', async () => {
         try {
           await saveCreds();
         } catch (err: any) {
           this.logger.warn(
-            `[WhatsApp company_${companyId}] Error guardando credenciales: ${err?.message}`,
+            `[WhatsApp ch_${channelId}] Error guardando credenciales: ${err?.message}`,
           );
         }
       });
@@ -289,19 +351,19 @@ export class WhatsappBaileysService
                 lastSyncMessage:
                   'Código QR generado. Escanealo desde WhatsApp en tu celular.',
               },
-              { where: { companyId } },
+              { where: { id: channelId } },
             );
-            this.emitRealtimeState(companyId);
+            this.emitRealtimeState(channelId, companyId, userId);
           } catch (qrErr: any) {
             this.logger.warn(
-              `[WhatsApp company_${companyId}] Error generando QR PNG: ${qrErr?.message}`,
+              `[WhatsApp ch_${channelId}] Error generando QR PNG: ${qrErr?.message}`,
             );
           }
         }
 
         if (connection === 'connecting') {
           entry.connectionStatus = WhatsappConnectionStatus.CONNECTING;
-          this.emitRealtimeState(companyId);
+          this.emitRealtimeState(channelId, companyId, userId);
         }
 
         if (connection === 'open') {
@@ -327,11 +389,11 @@ export class WhatsappBaileysService
               lastSyncStatus: WhatsappSyncStatus.OK,
               lastSyncMessage: `Conectado como ${cleanName || cleanPhone || 'WhatsApp'}`,
             },
-            { where: { companyId } },
+            { where: { id: channelId } },
           );
-          this.emitRealtimeState(companyId);
+          this.emitRealtimeState(channelId, companyId, userId);
           this.logger.log(
-            `✅ [WhatsApp] Compañía #${companyId} conectada (+${cleanPhone})`,
+            `✅ [WhatsApp] Canal #${channelId} (usuario #${userId}) conectado (+${cleanPhone})`,
           );
         }
 
@@ -351,13 +413,13 @@ export class WhatsappBaileysService
           }
 
           if (isLoggedOut) {
-            this.clearSessionFiles(companyId);
+            this.clearSessionFiles(companyId, userId);
             entry.connectionStatus = WhatsappConnectionStatus.DISCONNECTED;
             entry.connectedPhone = null;
             entry.connectedName = null;
             entry.lastError =
               'La sesión fue cerrada desde el celular. Escaneá un nuevo QR para reconectar.';
-            this.sessions.delete(companyId);
+            this.sessions.delete(channelId);
 
             await this.whatsappChannelModel.update(
               {
@@ -367,15 +429,14 @@ export class WhatsappBaileysService
                 lastSyncStatus: WhatsappSyncStatus.ERROR,
                 lastSyncMessage: entry.lastError,
               },
-              { where: { companyId } },
+              { where: { id: channelId } },
             );
-            this.emitRealtimeState(companyId);
+            this.emitRealtimeState(channelId, companyId, userId);
             return;
           }
 
           // Reconexión automática ante cortes transitorios o restartRequired (515)
-          const channel = await this.whatsappChannelModel.findOne({
-            where: { companyId },
+          const channel = await this.whatsappChannelModel.findByPk(channelId, {
             attributes: ['id', 'isActive'],
           });
 
@@ -388,13 +449,13 @@ export class WhatsappBaileysService
 
             entry.connectionStatus = WhatsappConnectionStatus.CONNECTING;
             entry.lastError = `Reconectando (${entry.reconnectAttempts}/6)...`;
-            this.emitRealtimeState(companyId);
+            this.emitRealtimeState(channelId, companyId, userId);
 
-            this.sessions.delete(companyId);
+            this.sessions.delete(channelId);
             const timer = setTimeout(() => {
-              this.startSession(companyId).catch((err) => {
+              this.startSession(channelId).catch((err) => {
                 this.logger.warn(
-                  `[WhatsApp company_${companyId}] Reintento fallido: ${err?.message}`,
+                  `[WhatsApp ch_${channelId}] Reintento fallido: ${err?.message}`,
                 );
               });
             }, delayMs);
@@ -402,7 +463,7 @@ export class WhatsappBaileysService
           } else {
             entry.connectionStatus = WhatsappConnectionStatus.ERROR;
             entry.lastError = errorMessage;
-            this.sessions.delete(companyId);
+            this.sessions.delete(channelId);
 
             await this.whatsappChannelModel.update(
               {
@@ -410,9 +471,9 @@ export class WhatsappBaileysService
                 lastSyncStatus: WhatsappSyncStatus.ERROR,
                 lastSyncMessage: errorMessage,
               },
-              { where: { companyId } },
+              { where: { id: channelId } },
             );
-            this.emitRealtimeState(companyId);
+            this.emitRealtimeState(channelId, companyId, userId);
           }
         }
       });
@@ -433,31 +494,45 @@ export class WhatsappBaileysService
 
         if (attachmentMessages.length > 0 && this.incomingHandler) {
           this.logger.log(
-            `[WhatsApp company_${companyId}] ${attachmentMessages.length} mensaje(s) con adjunto recibido(s): ${attachmentMessages
+            `[WhatsApp ch_${channelId}] ${attachmentMessages.length} mensaje(s) con adjunto recibido(s): ${attachmentMessages
               .map((m: any) => `${m?.key?.remoteJid}${m?.key?.fromMe ? ' (fromMe)' : ''}`)
               .join(', ')}`,
           );
-          await this.incomingHandler(companyId, attachmentMessages).catch(
-            (err) => {
-              this.logger.error(
-                `[WhatsApp company_${companyId}] Error procesando mensajes entrantes: ${err?.message}`,
-              );
-            },
-          );
+          await this.incomingHandler(
+            channelId,
+            companyId,
+            userId,
+            attachmentMessages,
+          ).catch((err) => {
+            this.logger.error(
+              `[WhatsApp ch_${channelId}] Error procesando mensajes entrantes: ${err?.message}`,
+            );
+          });
         }
       });
 
-      return this.getRuntimeSnapshot(companyId);
+      return this.getRuntimeSnapshot(channelId);
     } finally {
-      this.connectingLocks.delete(companyId);
+      this.connectingLocks.delete(channelId);
     }
   }
 
   async disconnectSession(
-    companyId: number,
+    channelId: number,
     clearFiles = true,
   ): Promise<void> {
-    const entry = this.sessions.get(companyId);
+    const entry = this.sessions.get(channelId);
+    let companyId = entry?.companyId;
+    let userId = entry?.userId ?? null;
+
+    if (!companyId) {
+      const ch = await this.whatsappChannelModel.findByPk(channelId, {
+        attributes: ['id', 'companyId', 'userId'],
+      });
+      companyId = ch?.companyId;
+      userId = ch?.userId ?? null;
+    }
+
     if (entry) {
       entry.manuallyStopped = true;
       if (entry.reconnectTimer) {
@@ -469,11 +544,11 @@ export class WhatsappBaileysService
         }
         entry.sock?.end?.(undefined);
       } catch {}
-      this.sessions.delete(companyId);
+      this.sessions.delete(channelId);
     }
 
-    if (clearFiles) {
-      this.clearSessionFiles(companyId);
+    if (clearFiles && companyId) {
+      this.clearSessionFiles(companyId, userId);
     }
 
     await this.whatsappChannelModel.update(
@@ -484,31 +559,31 @@ export class WhatsappBaileysService
         lastSyncStatus: WhatsappSyncStatus.IDLE,
         lastSyncMessage: 'Sesión desconectada manualmente.',
       },
-      { where: { companyId } },
+      { where: { id: channelId } },
     );
-    this.emitRealtimeState(companyId);
+    this.emitRealtimeState(channelId, companyId, userId);
   }
 
-  private clearSessionFiles(companyId: number): void {
+  private clearSessionFiles(companyId: number, userId: number | null): void {
     try {
-      const dir = getTenantWhatsappSessionPath(companyId);
+      const dir = getTenantWhatsappSessionPath(companyId, userId);
       if (existsSync(dir)) {
         rmSync(dir, { recursive: true, force: true });
       }
     } catch (err: any) {
       this.logger.warn(
-        `[WhatsApp company_${companyId}] No se pudo limpiar carpeta de sesión: ${err?.message}`,
+        `[WhatsApp company_${companyId}_user_${userId ?? 'general'}] No se pudo limpiar carpeta de sesión: ${err?.message}`,
       );
     }
   }
 
   async downloadMessageMedia(
-    companyId: number,
+    channelId: number,
     waMessage: any,
   ): Promise<Buffer> {
     const baileys = await this.loadBaileys();
     const { downloadMediaMessage } = baileys;
-    const entry = this.sessions.get(companyId);
+    const entry = this.sessions.get(channelId);
 
     const buffer = await downloadMediaMessage(
       waMessage,
@@ -526,11 +601,11 @@ export class WhatsappBaileysService
   }
 
   async sendTextMessage(
-    companyId: number,
+    channelId: number,
     toJidOrPhone: string,
     text: string,
   ): Promise<void> {
-    const entry = this.sessions.get(companyId);
+    const entry = this.sessions.get(channelId);
     if (!entry?.sock || entry.connectionStatus !== WhatsappConnectionStatus.CONNECTED) {
       return;
     }
@@ -547,11 +622,11 @@ export class WhatsappBaileysService
   /**
    * Lista todos los grupos en los que participa la sesión conectada de WhatsApp.
    */
-  async listParticipatingGroups(companyId: number): Promise<{
+  async listParticipatingGroups(channelId: number): Promise<{
     connected: boolean;
     groups: Array<{ jid: string; name: string; participantsCount: number }>;
   }> {
-    const entry = this.sessions.get(companyId);
+    const entry = this.sessions.get(channelId);
     if (
       !entry?.sock ||
       entry.connectionStatus !== WhatsappConnectionStatus.CONNECTED
@@ -562,7 +637,7 @@ export class WhatsappBaileysService
     try {
       const participating = await entry.sock.groupFetchAllParticipating();
       const cache =
-        this.groupSubjectCache.get(companyId) || new Map<string, string>();
+        this.groupSubjectCache.get(channelId) || new Map<string, string>();
       const list = Object.values(participating || {})
         .map((g: any) => {
           const jid = String(g?.id || '').trim();
@@ -576,11 +651,11 @@ export class WhatsappBaileysService
         .filter((g) => g.jid.endsWith('@g.us'))
         .sort((a, b) => a.name.localeCompare(b.name, 'es'));
 
-      this.groupSubjectCache.set(companyId, cache);
+      this.groupSubjectCache.set(channelId, cache);
       return { connected: true, groups: list };
     } catch (err: any) {
       this.logger.warn(
-        `[WhatsApp company_${companyId}] Error listando grupos: ${err?.message}`,
+        `[WhatsApp ch_${channelId}] Error listando grupos: ${err?.message}`,
       );
       return { connected: true, groups: [] };
     }
@@ -590,13 +665,13 @@ export class WhatsappBaileysService
    * Resuelve el asunto/nombre de un grupo a partir de caché o metadata de Baileys.
    */
   async resolveGroupSubject(
-    companyId: number,
+    channelId: number,
     groupJid: string,
   ): Promise<string | null> {
-    const cached = this.groupSubjectCache.get(companyId)?.get(groupJid);
+    const cached = this.groupSubjectCache.get(channelId)?.get(groupJid);
     if (cached) return cached;
 
-    const entry = this.sessions.get(companyId);
+    const entry = this.sessions.get(channelId);
     if (
       !entry?.sock ||
       entry.connectionStatus !== WhatsappConnectionStatus.CONNECTED
@@ -609,9 +684,9 @@ export class WhatsappBaileysService
       const subject = meta?.subject ? String(meta.subject).trim() : null;
       if (subject) {
         const cache =
-          this.groupSubjectCache.get(companyId) || new Map<string, string>();
+          this.groupSubjectCache.get(channelId) || new Map<string, string>();
         cache.set(groupJid, subject);
-        this.groupSubjectCache.set(companyId, cache);
+        this.groupSubjectCache.set(channelId, cache);
       }
       return subject;
     } catch {

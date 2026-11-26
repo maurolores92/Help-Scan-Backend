@@ -77,6 +77,7 @@ export class SyncService implements OnModuleInit {
     await this.ensureClientSchemaColumns();
     await this.ensureWhatsappSchemaColumns();
     await this.ensureEmailSchemaColumns();
+    await this.ensureUserChannelsMigration();
     await this.ensureIndexes();
 
     try {
@@ -272,6 +273,97 @@ export class SyncService implements OnModuleInit {
     }
   }
 
+  /**
+   * Migra canales Email, WhatsApp y Telegram desde unicidad por compañía a unicidad
+   * por usuario `(company_id, user_id)`, asignando los canales y mensajes previos al
+   * usuario administrador de cada compañía.
+   */
+  private async ensureUserChannelsMigration() {
+    const statements = [
+      `ALTER TABLE "company_email_channels" ADD COLUMN IF NOT EXISTS "user_id" INTEGER REFERENCES "users"("id") ON DELETE SET NULL;`,
+      `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "user_id" INTEGER REFERENCES "users"("id") ON DELETE SET NULL;`,
+      `ALTER TABLE "company_telegram_channels" ADD COLUMN IF NOT EXISTS "user_id" INTEGER REFERENCES "users"("id") ON DELETE SET NULL;`,
+      `ALTER TABLE "email_messages" ADD COLUMN IF NOT EXISTS "user_id" INTEGER REFERENCES "users"("id") ON DELETE SET NULL;`,
+      `ALTER TABLE "whatsapp_messages" ADD COLUMN IF NOT EXISTS "user_id" INTEGER REFERENCES "users"("id") ON DELETE SET NULL;`,
+      `ALTER TABLE "telegram_messages" ADD COLUMN IF NOT EXISTS "user_id" INTEGER REFERENCES "users"("id") ON DELETE SET NULL;`,
+
+      // Quitar constraints/índices UNIQUE antiguos solo sobre company_id
+      `ALTER TABLE "company_email_channels" DROP CONSTRAINT IF EXISTS "company_email_channels_company_id_key";`,
+      `ALTER TABLE "company_whatsapp_channels" DROP CONSTRAINT IF EXISTS "company_whatsapp_channels_company_id_key";`,
+      `ALTER TABLE "company_telegram_channels" DROP CONSTRAINT IF EXISTS "company_telegram_channels_company_id_key";`,
+      `DROP INDEX IF EXISTS "company_email_channels_company_id_key";`,
+      `DROP INDEX IF EXISTS "company_whatsapp_channels_company_id_key";`,
+      `DROP INDEX IF EXISTS "company_telegram_channels_company_id_key";`,
+
+      // Backfill: asignar canales existentes sin user_id al admin principal de la compañía
+      `UPDATE "company_email_channels" ch
+       SET "user_id" = COALESCE(
+         (SELECT u."id" FROM "users" u
+          LEFT JOIN "roles" r ON r."id" = u."role_id"
+          WHERE u."company_id" = ch."company_id"
+            AND (u."is_admin" = TRUE OR r."slug" IN ('company_admin', 'admin'))
+          ORDER BY (u."status" = 'ACTIVE') DESC, u."id" ASC LIMIT 1),
+         (SELECT u."id" FROM "users" u WHERE u."company_id" = ch."company_id" ORDER BY u."id" ASC LIMIT 1)
+       )
+       WHERE ch."user_id" IS NULL;`,
+      `UPDATE "company_whatsapp_channels" ch
+       SET "user_id" = COALESCE(
+         (SELECT u."id" FROM "users" u
+          LEFT JOIN "roles" r ON r."id" = u."role_id"
+          WHERE u."company_id" = ch."company_id"
+            AND (u."is_admin" = TRUE OR r."slug" IN ('company_admin', 'admin'))
+          ORDER BY (u."status" = 'ACTIVE') DESC, u."id" ASC LIMIT 1),
+         (SELECT u."id" FROM "users" u WHERE u."company_id" = ch."company_id" ORDER BY u."id" ASC LIMIT 1)
+       )
+       WHERE ch."user_id" IS NULL;`,
+      `UPDATE "company_telegram_channels" ch
+       SET "user_id" = COALESCE(
+         (SELECT u."id" FROM "users" u
+          LEFT JOIN "roles" r ON r."id" = u."role_id"
+          WHERE u."company_id" = ch."company_id"
+            AND (u."is_admin" = TRUE OR r."slug" IN ('company_admin', 'admin'))
+          ORDER BY (u."status" = 'ACTIVE') DESC, u."id" ASC LIMIT 1),
+         (SELECT u."id" FROM "users" u WHERE u."company_id" = ch."company_id" ORDER BY u."id" ASC LIMIT 1)
+       )
+       WHERE ch."user_id" IS NULL;`,
+
+      // Backfill mensajes históricos y documentos desde sus canales migrados
+      `UPDATE "email_messages" m SET "user_id" = ch."user_id"
+       FROM "company_email_channels" ch WHERE m."channel_id" = ch."id" AND m."user_id" IS NULL AND ch."user_id" IS NOT NULL;`,
+      `UPDATE "email_messages" m SET "user_id" = ch."user_id"
+       FROM "company_email_channels" ch WHERE m."company_id" = ch."company_id" AND m."user_id" IS NULL AND ch."user_id" IS NOT NULL;`,
+      `UPDATE "whatsapp_messages" m SET "user_id" = ch."user_id"
+       FROM "company_whatsapp_channels" ch WHERE m."channel_id" = ch."id" AND m."user_id" IS NULL AND ch."user_id" IS NOT NULL;`,
+      `UPDATE "whatsapp_messages" m SET "user_id" = ch."user_id"
+       FROM "company_whatsapp_channels" ch WHERE m."company_id" = ch."company_id" AND m."user_id" IS NULL AND ch."user_id" IS NOT NULL;`,
+      `UPDATE "telegram_messages" m SET "user_id" = ch."user_id"
+       FROM "company_telegram_channels" ch WHERE m."channel_id" = ch."id" AND m."user_id" IS NULL AND ch."user_id" IS NOT NULL;`,
+      `UPDATE "telegram_messages" m SET "user_id" = ch."user_id"
+       FROM "company_telegram_channels" ch WHERE m."company_id" = ch."company_id" AND m."user_id" IS NULL AND ch."user_id" IS NOT NULL;`,
+      `UPDATE "documents" d
+       SET "user_id" = COALESCE(
+         (SELECT u."id" FROM "users" u
+          LEFT JOIN "roles" r ON r."id" = u."role_id"
+          WHERE u."company_id" = d."company_id"
+            AND (u."is_admin" = TRUE OR r."slug" IN ('company_admin', 'admin'))
+          ORDER BY (u."status" = 'ACTIVE') DESC, u."id" ASC LIMIT 1),
+         (SELECT u."id" FROM "users" u WHERE u."company_id" = d."company_id" ORDER BY u."id" ASC LIMIT 1)
+       )
+       WHERE d."user_id" IS NULL AND d."source" IN ('EMAIL', 'WHATSAPP', 'TELEGRAM');`,
+
+      // Índices únicos compuestos por compañía y usuario
+      `CREATE UNIQUE INDEX IF NOT EXISTS "idx_email_channels_company_user_unique" ON "company_email_channels" ("company_id", "user_id") WHERE "user_id" IS NOT NULL;`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS "idx_whatsapp_channels_company_user_unique" ON "company_whatsapp_channels" ("company_id", "user_id") WHERE "user_id" IS NOT NULL;`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS "idx_telegram_channels_company_user_unique" ON "company_telegram_channels" ("company_id", "user_id") WHERE "user_id" IS NOT NULL;`,
+    ];
+
+    for (const sql of statements) {
+      try {
+        await this.sequelize.query(sql);
+      } catch { }
+    }
+  }
+
   private async ensureIndexes() {
     const singleColumnIndexes = [
       { table: 'plans', name: 'idx_plans_slug', column: 'slug' },
@@ -286,6 +378,7 @@ export class SyncService implements OnModuleInit {
       { table: 'notifications', name: 'idx_notifications_company_id', column: 'company_id' },
       { table: 'notifications', name: 'idx_notifications_user_id', column: 'user_id' },
       { table: 'documents', name: 'idx_documents_company_id', column: 'company_id' },
+      { table: 'documents', name: 'idx_documents_user_id', column: 'user_id' },
       { table: 'documents', name: 'idx_documents_status', column: 'status' },
       { table: 'documents', name: 'idx_documents_file_hash', column: 'file_hash' },
       { table: 'documents', name: 'idx_documents_purchase_order_number', column: 'purchase_order_number' },
@@ -300,15 +393,21 @@ export class SyncService implements OnModuleInit {
       { table: 'ftp_devices', name: 'idx_ftp_devices_company_id', column: 'company_id' },
       { table: 'ftp_devices', name: 'idx_ftp_devices_status', column: 'status' },
       { table: 'company_email_channels', name: 'idx_email_channels_company_id', column: 'company_id' },
+      { table: 'company_email_channels', name: 'idx_email_channels_user_id', column: 'user_id' },
       { table: 'email_messages', name: 'idx_email_messages_company_id', column: 'company_id' },
+      { table: 'email_messages', name: 'idx_email_messages_user_id', column: 'user_id' },
       { table: 'email_messages', name: 'idx_email_messages_status', column: 'status' },
       { table: 'email_messages', name: 'idx_email_messages_message_id', column: 'message_id' },
       { table: 'company_whatsapp_channels', name: 'idx_whatsapp_channels_company_id', column: 'company_id' },
+      { table: 'company_whatsapp_channels', name: 'idx_whatsapp_channels_user_id', column: 'user_id' },
       { table: 'whatsapp_messages', name: 'idx_whatsapp_messages_company_id', column: 'company_id' },
+      { table: 'whatsapp_messages', name: 'idx_whatsapp_messages_user_id', column: 'user_id' },
       { table: 'whatsapp_messages', name: 'idx_whatsapp_messages_status', column: 'status' },
       { table: 'whatsapp_messages', name: 'idx_whatsapp_messages_external_id', column: 'external_message_id' },
       { table: 'company_telegram_channels', name: 'idx_telegram_channels_company_id', column: 'company_id' },
+      { table: 'company_telegram_channels', name: 'idx_telegram_channels_user_id', column: 'user_id' },
       { table: 'telegram_messages', name: 'idx_telegram_messages_company_id', column: 'company_id' },
+      { table: 'telegram_messages', name: 'idx_telegram_messages_user_id', column: 'user_id' },
       { table: 'telegram_messages', name: 'idx_telegram_messages_status', column: 'status' },
       { table: 'telegram_messages', name: 'idx_telegram_messages_external_id', column: 'external_message_id' },
       { table: 'demo_requests', name: 'idx_demo_requests_status', column: 'status' },

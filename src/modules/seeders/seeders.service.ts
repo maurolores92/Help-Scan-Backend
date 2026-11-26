@@ -145,6 +145,7 @@ export class SeedService {
 
       let createdCount = 0;
       let updatedCount = 0;
+      const newlyCreatedNames = new Set<string>();
 
       for (const p of permissionsData) {
         const [record, created] = await Permission.findOrCreate({
@@ -155,6 +156,7 @@ export class SeedService {
 
         if (created) {
           createdCount++;
+          newlyCreatedNames.add(p.name);
         } else {
           await record.update(
             {
@@ -188,21 +190,55 @@ export class SeedService {
         await companyAdminRole.$set('permissions', allTenantPermissions, { transaction });
       }
 
-      // Operador de Documentos: visualización de dashboard y trabajo con PDFs e IA
+      // Operador de Documentos: visualización de dashboard, PDFs e IA + canales propios en creación o nuevos seeds
       const userRole = await Role.findOne({
         where: { slug: 'user' },
         transaction,
       });
       if (userRole) {
-        const userPerms = allTenantPermissions.filter((p: any) =>
-          [
-            'VIEW_DASHBOARD',
-            'VIEW_DOCUMENTS',
-            'UPLOAD_DOCUMENT',
-            'QUERY_AI_DOCUMENTS',
-          ].includes(p.name),
-        );
-        await userRole.$set('permissions', userPerms, { transaction });
+        const existingRolePerms = await RolePermission.count({
+          where: { roleId: userRole.id },
+          transaction,
+        });
+
+        const defaultUserPermNames = [
+          'VIEW_DASHBOARD',
+          'VIEW_DOCUMENTS',
+          'UPLOAD_DOCUMENT',
+          'QUERY_AI_DOCUMENTS',
+          'VIEW_CHANNELS',
+          'MANAGE_OWN_EMAIL',
+          'MANAGE_OWN_WHATSAPP',
+          'MANAGE_OWN_TELEGRAM',
+          'VIEW_EMAIL_INBOX',
+          'VIEW_WHATSAPP_INBOX',
+          'VIEW_TELEGRAM_INBOX',
+        ];
+
+        if (existingRolePerms === 0) {
+          const userPerms = allTenantPermissions.filter((p: any) =>
+            defaultUserPermNames.includes(p.name),
+          );
+          await userRole.$set('permissions', userPerms, { transaction });
+        } else {
+          // Agregar solo los permisos propios recién introducidos sin sobrescribir cambios hechos en Roles
+          const newOwnChannelPerms = allTenantPermissions.filter(
+            (p: any) =>
+              newlyCreatedNames.has(p.name) &&
+              [
+                'MANAGE_OWN_EMAIL',
+                'MANAGE_OWN_WHATSAPP',
+                'MANAGE_OWN_TELEGRAM',
+              ].includes(p.name),
+          );
+          for (const perm of newOwnChannelPerms) {
+            await RolePermission.findOrCreate({
+              where: { roleId: userRole.id, permissionId: perm.id },
+              defaults: { roleId: userRole.id, permissionId: perm.id } as never,
+              transaction,
+            });
+          }
+        }
       }
 
       await transaction.commit();

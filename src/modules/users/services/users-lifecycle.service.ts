@@ -6,7 +6,9 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { InjectModel } from '@nestjs/sequelize';
 import { Role } from '../../role/role.model';
 import { Company } from '../../companies/company.model';
@@ -55,7 +57,36 @@ export class UsersLifecycleService {
     private readonly auditService: AuditService,
     private readonly notificationsService: NotificationsService,
     private readonly tenantQuotasService: TenantQuotasService,
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
+
+  private async stopUserChannelsSafely(userId: number): Promise<void> {
+    if (!this.moduleRef) return;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { EmailIngestionSchedulerService } = require('../../channels/services/email-ingestion-scheduler.service');
+      const emailScheduler = this.moduleRef.get(EmailIngestionSchedulerService, {
+        strict: false,
+      });
+      await emailScheduler?.stopIdleWatchersForUser?.(userId);
+    } catch { }
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { WhatsappBaileysService } = require('../../channels/services/whatsapp-baileys.service');
+      const waService = this.moduleRef.get(WhatsappBaileysService, {
+        strict: false,
+      });
+      await waService?.stopSessionsForUser?.(userId, false);
+    } catch { }
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { TelegramChannelService } = require('../../channels/services/telegram-channel.service');
+      const tgService = this.moduleRef.get(TelegramChannelService, {
+        strict: false,
+      });
+      await tgService?.stopPollingForUser?.(userId);
+    } catch { }
+  }
 
   private assertRoleAllowedForCompany(role: Role, companyId: number): void {
     if (role.slug === 'superadmin') {
@@ -269,6 +300,10 @@ export class UsersLifecycleService {
       await user.update(allowedUpdates as Partial<Users>, { transaction });
       await transaction.commit();
 
+      if (allowedUpdates.status === UserStatus.INACTIVE) {
+        await this.stopUserChannelsSafely(userId);
+      }
+
       const updatedUser = await this.userModel.findByPk(userId, {
         attributes: { exclude: ['password'] },
         include: [
@@ -338,6 +373,8 @@ export class UsersLifecycleService {
       const previousData = toPlainUserRecord(user);
       await user.update({ status: UserStatus.INACTIVE }, { transaction });
       await transaction.commit();
+
+      await this.stopUserChannelsSafely(userId);
 
       await this.auditService.log({
         action: AuditAction.DELETE,

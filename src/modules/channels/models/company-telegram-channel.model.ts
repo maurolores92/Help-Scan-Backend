@@ -9,6 +9,7 @@ import {
   Table,
 } from 'sequelize-typescript';
 import { Company } from '../../companies/company.model';
+import { Users } from '../../users/users.model';
 
 export enum TelegramSenderPolicy {
   ALL = 'ALL',
@@ -36,13 +37,23 @@ export class CompanyTelegramChannel extends Model {
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
-    unique: true,
     field: 'company_id',
   })
   declare companyId: number;
 
   @BelongsTo(() => Company, { foreignKey: 'companyId' })
   declare company: Company;
+
+  @ForeignKey(() => Users)
+  @Column({
+    type: DataType.INTEGER,
+    allowNull: true,
+    field: 'user_id',
+  })
+  declare userId: number | null;
+
+  @BelongsTo(() => Users, { foreignKey: 'userId', constraints: false })
+  declare user: Users | null;
 
   @Column({
     type: DataType.TEXT,

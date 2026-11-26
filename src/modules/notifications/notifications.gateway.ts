@@ -111,6 +111,12 @@ export class NotificationsGateway
     this.server.to(`user-${userId}`).emit('notification', notification);
   }
 
+  /** Emite un evento WebSocket arbitrario al room de un usuario específico */
+  emitEventToUser(userId: number, event: string, data: any): void {
+    if (!this.server || !userId) return;
+    this.server.to(`user-${userId}`).emit(event, data);
+  }
+
   /** Notifica en vivo a sesiones previas del usuario que fueron cerradas por un nuevo login */
   emitSessionReplaced(userId: number, activeSessionId: string): void {
     if (!this.server) return;

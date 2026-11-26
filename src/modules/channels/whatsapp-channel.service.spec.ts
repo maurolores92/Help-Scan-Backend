@@ -36,6 +36,7 @@ describe('WhatsappChannelService (QR Baileys)', () => {
     const whatsappChannelModel: any = {
       findOrCreate: jest.fn().mockResolvedValue([channelRecord, true]),
       findOne: jest.fn().mockResolvedValue(channelRecord),
+      findByPk: jest.fn().mockResolvedValue(channelRecord),
     };
 
     const baileysService: any = {
@@ -64,7 +65,7 @@ describe('WhatsappChannelService (QR Baileys)', () => {
 
     const res = await service.connectQr({ id: 9, companyId: 7, role: 'company_admin' });
 
-    expect(baileysService.startSession).toHaveBeenCalledWith(7);
+    expect(baileysService.startSession).toHaveBeenCalledWith(1);
     expect(res.runtime.connectionStatus).toBe(WhatsappConnectionStatus.QR_READY);
     expect(res.runtime.qrDataUrl).toBe('data:image/png;base64,MOCK_QR');
   });
@@ -73,7 +74,8 @@ describe('WhatsappChannelService (QR Baileys)', () => {
     const channelRecord: any = {
       id: 3,
       companyId: 7,
-      sessionKey: 'company_7',
+      userId: 9,
+      sessionKey: 'company_7_user_9',
       senderPolicy: WhatsappSenderPolicy.WHITELIST,
       allowedPhones: ['5491144445555'],
       ignoreGroups: true,
@@ -87,6 +89,7 @@ describe('WhatsappChannelService (QR Baileys)', () => {
     const createdMessages: any[] = [];
     const whatsappChannelModel: any = {
       findOne: jest.fn().mockResolvedValue(channelRecord),
+      findByPk: jest.fn().mockResolvedValue(channelRecord),
     };
     const whatsappMessageModel: any = {
       findOne: jest.fn().mockResolvedValue(null),
@@ -135,7 +138,7 @@ describe('WhatsappChannelService (QR Baileys)', () => {
       { dispatch: jest.fn().mockResolvedValue(undefined) } as any,
     );
 
-    await service.handleIncomingBaileysMessages(7, [
+    await service.handleIncomingBaileysMessages(3, 7, 9, [
       // 1. Mensaje propio saliente -> debe ignorarse
       {
         key: { id: 'wa.fromme', fromMe: true, remoteJid: '5491144445555@s.whatsapp.net' },
@@ -223,6 +226,7 @@ describe('WhatsappChannelService (QR Baileys)', () => {
     const createdMessages: any[] = [];
     const whatsappChannelModel: any = {
       findOne: jest.fn().mockResolvedValue(channelRecord),
+      findByPk: jest.fn().mockResolvedValue(channelRecord),
     };
     const whatsappMessageModel: any = {
       findOne: jest.fn().mockResolvedValue(null),
@@ -269,7 +273,7 @@ describe('WhatsappChannelService (QR Baileys)', () => {
       { dispatch: jest.fn().mockResolvedValue(undefined) } as any,
     );
 
-    await service.handleIncomingBaileysMessages(7, [
+    await service.handleIncomingBaileysMessages(4, 7, 9, [
       // Grupo NO autorizado -> debe ignorarse
       {
         key: {

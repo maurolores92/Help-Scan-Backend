@@ -134,8 +134,26 @@ export const permissionsData = [
   },
   {
     name: 'MANAGE_CHANNELS',
-    displayName: 'Configurar Canales de Ingesta',
-    description: 'Permite conectar, probar y administrar casillas IMAP y canales externos de ingesta de documentos',
+    displayName: 'Configurar Canales de Ingesta (Todos)',
+    description: 'Permite conectar, probar y administrar casillas IMAP, WhatsApp y Telegram de cualquier usuario de la compañía',
+    categoria: CategoriaPermiso.DOCUMENTS,
+  },
+  {
+    name: 'MANAGE_OWN_EMAIL',
+    displayName: 'Configurar Mi Email (IMAP)',
+    description: 'Permite al usuario conectar, editar y sincronizar su propia casilla de correo electrónico',
+    categoria: CategoriaPermiso.DOCUMENTS,
+  },
+  {
+    name: 'MANAGE_OWN_WHATSAPP',
+    displayName: 'Configurar Mi WhatsApp (QR)',
+    description: 'Permite al usuario vincular por código QR y administrar su propia sesión de WhatsApp',
+    categoria: CategoriaPermiso.DOCUMENTS,
+  },
+  {
+    name: 'MANAGE_OWN_TELEGRAM',
+    displayName: 'Configurar Mi Telegram Bot',
+    description: 'Permite al usuario conectar y administrar su propio Bot de Telegram (@BotFather)',
     categoria: CategoriaPermiso.DOCUMENTS,
   },
   {

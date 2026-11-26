@@ -36,49 +36,73 @@ export class ChannelsController {
     private readonly telegramChannelService: TelegramChannelService,
   ) {}
 
+  @Get('users-overview')
+  @RequirePermission(
+    'VIEW_CHANNELS',
+    'MANAGE_CHANNELS',
+    'VIEW_USERS',
+    'MANAGE_OWN_EMAIL',
+    'MANAGE_OWN_WHATSAPP',
+    'MANAGE_OWN_TELEGRAM',
+  )
+  async getUsersChannelsOverview(@GetUser() user: any) {
+    return this.channelsService.getCompanyUsersChannelsOverview(user);
+  }
+
   // =========================================================================
   // CANAL EMAIL (IMAP)
   // =========================================================================
 
   @Get('email')
   @RequireTenantModule('email')
-  @RequirePermission('VIEW_CHANNELS')
-  async getEmailConfig(@GetUser() user: any) {
-    return this.channelsService.getEmailChannelConfig(user);
+  @RequirePermission('VIEW_CHANNELS', 'MANAGE_CHANNELS', 'MANAGE_OWN_EMAIL', 'VIEW_EMAIL_INBOX')
+  async getEmailConfig(
+    @GetUser() user: any,
+    @Query('userId') targetUserId?: string,
+  ) {
+    return this.channelsService.getEmailChannelConfig(user, targetUserId);
   }
 
   @Post('email')
   @RequireTenantModule('email')
-  @RequirePermission('MANAGE_CHANNELS')
+  @RequirePermission('MANAGE_CHANNELS', 'MANAGE_OWN_EMAIL')
   async upsertEmailConfig(
     @Body() dto: UpsertEmailChannelDto,
     @GetUser() user: any,
+    @Query('userId') targetUserId?: string,
   ) {
-    return this.channelsService.upsertEmailChannelConfig(dto, user);
+    return this.channelsService.upsertEmailChannelConfig(dto, user, targetUserId);
   }
 
   @Post('email/test')
   @RequireTenantModule('email')
-  @RequirePermission('MANAGE_CHANNELS')
+  @RequirePermission('MANAGE_CHANNELS', 'MANAGE_OWN_EMAIL')
   async testEmailConnection(
     @Body() dto: TestEmailConnectionDto,
     @GetUser() user: any,
+    @Query('userId') targetUserId?: string,
   ) {
-    return this.channelsService.testEmailConnection(dto, user);
+    return this.channelsService.testEmailConnection(dto, user, targetUserId);
   }
 
   @Post('email/sync')
   @RequireTenantModule('email')
-  @RequirePermission('MANAGE_CHANNELS')
-  async syncEmailNow(@GetUser() user: any) {
-    return this.channelsService.triggerManualSync(user);
+  @RequirePermission('MANAGE_CHANNELS', 'MANAGE_OWN_EMAIL')
+  async syncEmailNow(
+    @GetUser() user: any,
+    @Query('userId') targetUserId?: string,
+  ) {
+    return this.channelsService.triggerManualSync(user, targetUserId);
   }
 
   @Post('email/webhook-secret')
   @RequireTenantModule('email')
-  @RequirePermission('MANAGE_CHANNELS')
-  async regenerateEmailWebhookSecret(@GetUser() user: any) {
-    return this.channelsService.regenerateWebhookSecret(user);
+  @RequirePermission('MANAGE_CHANNELS', 'MANAGE_OWN_EMAIL')
+  async regenerateEmailWebhookSecret(
+    @GetUser() user: any,
+    @Query('userId') targetUserId?: string,
+  ) {
+    return this.channelsService.regenerateWebhookSecret(user, targetUserId);
   }
 
   @Get('emails')
@@ -117,50 +141,64 @@ export class ChannelsController {
 
   @Get('whatsapp')
   @RequireTenantModule('whatsapp')
-  @RequirePermission('VIEW_CHANNELS')
-  async getWhatsappConfig(@GetUser() user: any) {
-    return this.whatsappChannelService.getStatusAndConfig(user);
+  @RequirePermission('VIEW_CHANNELS', 'MANAGE_CHANNELS', 'MANAGE_OWN_WHATSAPP', 'VIEW_WHATSAPP_INBOX')
+  async getWhatsappConfig(
+    @GetUser() user: any,
+    @Query('userId') targetUserId?: string,
+  ) {
+    return this.whatsappChannelService.getStatusAndConfig(user, targetUserId);
   }
 
   @Get('whatsapp/groups')
   @RequireTenantModule('whatsapp')
-  @RequirePermission('VIEW_CHANNELS')
-  async listWhatsappGroups(@GetUser() user: any) {
-    return this.whatsappChannelService.listGroups(user);
+  @RequirePermission('VIEW_CHANNELS', 'MANAGE_CHANNELS', 'MANAGE_OWN_WHATSAPP', 'VIEW_WHATSAPP_INBOX')
+  async listWhatsappGroups(
+    @GetUser() user: any,
+    @Query('userId') targetUserId?: string,
+  ) {
+    return this.whatsappChannelService.listGroups(user, targetUserId);
   }
 
   @Post('whatsapp/connect')
   @RequireTenantModule('whatsapp')
-  @RequirePermission('MANAGE_CHANNELS')
-  async connectWhatsappQr(@GetUser() user: any) {
-    return this.whatsappChannelService.connectQr(user);
+  @RequirePermission('MANAGE_CHANNELS', 'MANAGE_OWN_WHATSAPP')
+  async connectWhatsappQr(
+    @GetUser() user: any,
+    @Query('userId') targetUserId?: string,
+  ) {
+    return this.whatsappChannelService.connectQr(user, targetUserId);
   }
 
   @Post('whatsapp/disconnect')
   @RequireTenantModule('whatsapp')
-  @RequirePermission('MANAGE_CHANNELS')
-  async disconnectWhatsapp(@GetUser() user: any) {
-    return this.whatsappChannelService.disconnect(user);
+  @RequirePermission('MANAGE_CHANNELS', 'MANAGE_OWN_WHATSAPP')
+  async disconnectWhatsapp(
+    @GetUser() user: any,
+    @Query('userId') targetUserId?: string,
+  ) {
+    return this.whatsappChannelService.disconnect(user, targetUserId);
   }
 
   @Patch('whatsapp/settings')
   @RequireTenantModule('whatsapp')
-  @RequirePermission('MANAGE_CHANNELS')
+  @RequirePermission('MANAGE_CHANNELS', 'MANAGE_OWN_WHATSAPP')
   async updateWhatsappSettings(
     @Body() dto: UpsertWhatsappChannelDto,
     @GetUser() user: any,
+    @Query('userId') targetUserId?: string,
   ) {
-    return this.whatsappChannelService.upsertSettings(dto, user);
+    return this.whatsappChannelService.upsertSettings(dto, user, targetUserId);
   }
 
   @Post('whatsapp/settings')
   @RequireTenantModule('whatsapp')
-  @RequirePermission('MANAGE_CHANNELS')
+  @RequirePermission('MANAGE_CHANNELS', 'MANAGE_OWN_WHATSAPP')
   async saveWhatsappSettings(
     @Body() dto: UpsertWhatsappChannelDto,
     @GetUser() user: any,
+    @Query('userId') targetUserId?: string,
   ) {
-    return this.whatsappChannelService.upsertSettings(dto, user);
+    return this.whatsappChannelService.upsertSettings(dto, user, targetUserId);
   }
 
   @Get('whatsapp/messages')
@@ -174,34 +212,39 @@ export class ChannelsController {
   }
 
   // =========================================================================
-  // CANAL TELEGRAM BOT PROPIO POR COMPAÑÍA (@BotFather)
+  // CANAL TELEGRAM BOT PROPIO POR USUARIO (@BotFather)
   // =========================================================================
 
   @Get('telegram')
   @RequireTenantModule('telegram')
-  @RequirePermission('VIEW_CHANNELS')
-  async getTelegramConfig(@GetUser() user: any) {
-    return this.telegramChannelService.getChannelConfig(user);
+  @RequirePermission('VIEW_CHANNELS', 'MANAGE_CHANNELS', 'MANAGE_OWN_TELEGRAM', 'VIEW_TELEGRAM_INBOX')
+  async getTelegramConfig(
+    @GetUser() user: any,
+    @Query('userId') targetUserId?: string,
+  ) {
+    return this.telegramChannelService.getChannelConfig(user, targetUserId);
   }
 
   @Post('telegram')
   @RequireTenantModule('telegram')
-  @RequirePermission('MANAGE_CHANNELS')
+  @RequirePermission('MANAGE_CHANNELS', 'MANAGE_OWN_TELEGRAM')
   async upsertTelegramConfig(
     @Body() dto: UpsertTelegramChannelDto,
     @GetUser() user: any,
+    @Query('userId') targetUserId?: string,
   ) {
-    return this.telegramChannelService.upsertChannelConfig(dto, user);
+    return this.telegramChannelService.upsertChannelConfig(dto, user, targetUserId);
   }
 
   @Post('telegram/test')
   @RequireTenantModule('telegram')
-  @RequirePermission('MANAGE_CHANNELS')
+  @RequirePermission('MANAGE_CHANNELS', 'MANAGE_OWN_TELEGRAM')
   async testTelegramConnection(
     @Body() dto: TestTelegramConnectionDto,
     @GetUser() user: any,
+    @Query('userId') targetUserId?: string,
   ) {
-    return this.telegramChannelService.testConnection(dto, user);
+    return this.telegramChannelService.testConnection(dto, user, targetUserId);
   }
 
   @Get('telegram/messages')

@@ -32,6 +32,11 @@ import { AuditAction } from '../../audit/audit.model';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { NotificationsGateway } from '../../notifications/notifications.gateway';
 import { isPlatformSuperAdmin } from '../../../common/utils/tenant-scope.util';
+import { Users, UserStatus } from '../../users/users.model';
+import {
+  resolveChannelOwnerContext,
+  resolveInboxFilterUserId,
+} from '../helpers/channel-user-scope.helper';
 import { convertImageBufferToPdf } from '../helpers/email-pdf-synthesizer.helper';
 import { extractWhatsappAttachmentInfo } from '../helpers/whatsapp-message.helper';
 
@@ -59,12 +64,15 @@ export class WhatsappChannelService implements OnModuleInit {
     private readonly auditService: AuditService,
     private readonly notificationsService: NotificationsService,
     @Optional() private readonly gateway?: NotificationsGateway,
+    @Optional()
+    @InjectModel(Users)
+    private readonly usersModel?: typeof Users,
   ) {}
 
   onModuleInit(): void {
     this.baileysService.registerIncomingMessagesHandler(
-      (companyId, messages) =>
-        this.handleIncomingBaileysMessages(companyId, messages),
+      (channelId, companyId, userId, messages) =>
+        this.handleIncomingBaileysMessages(channelId, companyId, userId, messages),
     );
   }
 
@@ -88,12 +96,14 @@ export class WhatsappChannelService implements OnModuleInit {
 
   private async ensureOrGetChannelRecord(
     companyId: number,
+    userId: number,
   ): Promise<CompanyWhatsappChannel> {
     const [channel] = await this.whatsappChannelModel.findOrCreate({
-      where: { companyId },
+      where: { companyId, userId },
       defaults: {
         companyId,
-        sessionKey: `company_${companyId}`,
+        userId,
+        sessionKey: `company_${companyId}_user_${userId}`,
         connectionStatus: WhatsappConnectionStatus.DISCONNECTED,
         senderPolicy: WhatsappSenderPolicy.ALL,
         allowedPhones: [],
@@ -111,9 +121,11 @@ export class WhatsappChannelService implements OnModuleInit {
 
   private buildSafeStatusResponse(
     channel: CompanyWhatsappChannel | null,
-    companyId: number,
+    targetUserId?: number | null,
   ) {
-    const runtime = this.baileysService.getRuntimeSnapshot(companyId, channel);
+    const runtime = channel
+      ? this.baileysService.getRuntimeSnapshot(channel.id, channel)
+      : this.baileysService.getRuntimeSnapshot(0, null);
     const plain = channel ? (channel.toJSON() as any) : null;
     const resolvedGroupPolicy = plain
       ? plain.groupPolicy ||
@@ -124,6 +136,7 @@ export class WhatsappChannelService implements OnModuleInit {
 
     return {
       configured: Boolean(channel),
+      targetUserId: channel?.userId ?? targetUserId ?? null,
       channel: plain
         ? {
             ...plain,
@@ -140,32 +153,54 @@ export class WhatsappChannelService implements OnModuleInit {
     };
   }
 
-  async getStatusAndConfig(user: any) {
-    const companyId = this.assertTenantUser(user);
+  async getStatusAndConfig(user: any, requestedUserId?: number | string | null) {
+    const owner = await resolveChannelOwnerContext(
+      user,
+      requestedUserId,
+      this.usersModel,
+    );
     const channel = await this.whatsappChannelModel.findOne({
-      where: { companyId },
+      where: { companyId: owner.companyId, userId: owner.userId },
     });
-    return this.buildSafeStatusResponse(channel, companyId);
+    return this.buildSafeStatusResponse(channel, owner.userId);
   }
 
-  async listGroups(user: any) {
-    const companyId = this.assertTenantUser(user);
-    return this.baileysService.listParticipatingGroups(companyId);
+  async listGroups(user: any, requestedUserId?: number | string | null) {
+    const owner = await resolveChannelOwnerContext(
+      user,
+      requestedUserId,
+      this.usersModel,
+    );
+    const channel = await this.whatsappChannelModel.findOne({
+      where: { companyId: owner.companyId, userId: owner.userId },
+      attributes: ['id'],
+    });
+    if (!channel) {
+      return { connected: false, groups: [] };
+    }
+    return this.baileysService.listParticipatingGroups(channel.id);
   }
 
-  async connectQr(user: any) {
-    const companyId = this.assertTenantUser(user);
-    const channel = await this.ensureOrGetChannelRecord(companyId);
+  async connectQr(user: any, requestedUserId?: number | string | null) {
+    const owner = await resolveChannelOwnerContext(
+      user,
+      requestedUserId,
+      this.usersModel,
+    );
+    const channel = await this.ensureOrGetChannelRecord(
+      owner.companyId,
+      owner.userId,
+    );
 
     if (!channel.isActive) {
       await channel.update({ isActive: true });
     }
 
-    await this.baileysService.startSession(companyId);
+    await this.baileysService.startSession(channel.id);
 
     // Esperar brevemente (~1.5s) para devolver el QR en la misma respuesta si ya se emitió
     for (let i = 0; i < 6; i++) {
-      const snap = this.baileysService.getRuntimeSnapshot(companyId, channel);
+      const snap = this.baileysService.getRuntimeSnapshot(channel.id, channel);
       if (
         snap.qrDataUrl ||
         snap.connectionStatus === WhatsappConnectionStatus.CONNECTED
@@ -175,57 +210,69 @@ export class WhatsappChannelService implements OnModuleInit {
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
 
-    const updated = await this.whatsappChannelModel.findOne({
-      where: { companyId },
-    });
+    const updated = await this.whatsappChannelModel.findByPk(channel.id);
 
     await this.auditService.log({
       action: AuditAction.UPDATE,
       entity: 'CompanyWhatsappChannel',
       entityId: channel.id,
-      companyId,
-      userId: user.id,
-      description: 'Inició vinculación de WhatsApp por Código QR',
+      companyId: owner.companyId,
+      userId: owner.actorUserId,
+      description: `Inició vinculación de WhatsApp por Código QR (usuario #${owner.userId})`,
     });
 
     return {
       message: 'Sesión WhatsApp iniciada. Escaneá el código QR desde tu celular.',
-      ...this.buildSafeStatusResponse(updated, companyId),
+      ...this.buildSafeStatusResponse(updated, owner.userId),
     };
   }
 
-  async disconnect(user: any) {
-    const companyId = this.assertTenantUser(user);
+  async disconnect(user: any, requestedUserId?: number | string | null) {
+    const owner = await resolveChannelOwnerContext(
+      user,
+      requestedUserId,
+      this.usersModel,
+    );
     const channel = await this.whatsappChannelModel.findOne({
-      where: { companyId },
+      where: { companyId: owner.companyId, userId: owner.userId },
     });
 
-    await this.baileysService.disconnectSession(companyId, true);
-
     if (channel) {
+      await this.baileysService.disconnectSession(channel.id, true);
       await this.auditService.log({
         action: AuditAction.UPDATE,
         entity: 'CompanyWhatsappChannel',
         entityId: channel.id,
-        companyId,
-        userId: user.id,
-        description: 'Desconectó la sesión de WhatsApp de la compañía',
+        companyId: owner.companyId,
+        userId: owner.actorUserId,
+        description: `Desconectó la sesión de WhatsApp del usuario #${owner.userId}`,
       });
     }
 
-    const updated = await this.whatsappChannelModel.findOne({
-      where: { companyId },
-    });
+    const updated = channel
+      ? await this.whatsappChannelModel.findByPk(channel.id)
+      : null;
 
     return {
       message: 'Sesión de WhatsApp desconectada correctamente.',
-      ...this.buildSafeStatusResponse(updated, companyId),
+      ...this.buildSafeStatusResponse(updated, owner.userId),
     };
   }
 
-  async upsertSettings(dto: UpsertWhatsappChannelDto, user: any) {
-    const companyId = this.assertTenantUser(user);
-    const channel = await this.ensureOrGetChannelRecord(companyId);
+  async upsertSettings(
+    dto: UpsertWhatsappChannelDto,
+    user: any,
+    requestedUserId?: number | string | null,
+  ) {
+    const owner = await resolveChannelOwnerContext(
+      user,
+      requestedUserId,
+      this.usersModel,
+    );
+    const channel = await this.ensureOrGetChannelRecord(
+      owner.companyId,
+      owner.userId,
+    );
 
     const normalizedAllowedPhones = Array.isArray(dto.allowedPhones)
       ? Array.from(
@@ -288,52 +335,68 @@ export class WhatsappChannelService implements OnModuleInit {
     });
 
     if (!nextActive) {
-      await this.baileysService.disconnectSession(companyId, false);
+      await this.baileysService.disconnectSession(channel.id, false);
     }
 
     await this.auditService.log({
       action: AuditAction.UPDATE,
       entity: 'CompanyWhatsappChannel',
       entityId: channel.id,
-      companyId,
-      userId: user.id,
+      companyId: owner.companyId,
+      userId: owner.actorUserId,
       payload: {
+        targetUserId: owner.userId,
         senderPolicy: channel.senderPolicy,
         ignoreGroups: channel.ignoreGroups,
         isActive: channel.isActive,
         processImages: channel.processImages,
         autoReplyConfirmation: channel.autoReplyConfirmation,
       },
-      description: 'Actualizó reglas de recepción de WhatsApp de la compañía',
+      description: `Actualizó reglas de recepción de WhatsApp (usuario #${owner.userId})`,
     });
 
     await this.notificationsService.dispatch({
       type: 'channel.whatsapp_configured',
       title: '💬 Configuración de WhatsApp actualizada',
       body: 'Se actualizaron las preferencias de recepción y procesamiento OCR para WhatsApp.',
-      companyId,
-      actorUser: { id: user.id },
-      extraData: { channelId: channel.id, link: '/channels' },
+      companyId: owner.companyId,
+      actorUser: { id: owner.actorUserId },
+      extraData: {
+        channelId: channel.id,
+        userId: owner.userId,
+        link: '/channels',
+      },
     });
 
     return {
       message: 'Preferencias de WhatsApp guardadas correctamente.',
-      ...this.buildSafeStatusResponse(channel, companyId),
+      ...this.buildSafeStatusResponse(channel, owner.userId),
     };
   }
 
   async handleIncomingBaileysMessages(
+    channelId: number,
     companyId: number,
+    userId: number | null,
     messages: any[],
   ): Promise<void> {
-    const channel = await this.whatsappChannelModel.findOne({
-      where: { companyId },
-    });
+    const channel = await this.whatsappChannelModel.findByPk(channelId);
     if (!channel || !channel.isActive) {
       return;
     }
 
-    const company = await this.companyModel.findByPk(companyId, {
+    const ownerUserId = channel.userId ?? userId ?? null;
+    if (this.usersModel && ownerUserId) {
+      const ownerUser = await this.usersModel.findByPk(ownerUserId, {
+        attributes: ['id', 'status'],
+      });
+      if (!ownerUser || ownerUser.status !== UserStatus.ACTIVE) {
+        return;
+      }
+    }
+
+    const resolvedCompanyId = channel.companyId ?? companyId;
+    const company = await this.companyModel.findByPk(resolvedCompanyId, {
       attributes: ['id', 'status', 'enabledModules'],
     });
     if (!company || company.status !== CompanyStatus.ACTIVE) {
@@ -370,7 +433,7 @@ export class WhatsappChannelService implements OnModuleInit {
       if (isGroup) {
         if (effectiveGroupPolicy === WhatsappGroupPolicy.IGNORE) {
           this.logger.debug(
-            `[WhatsApp company_${companyId}] Adjunto de grupo ${remoteJid} ignorado (groupPolicy=IGNORE).`,
+            `[WhatsApp channel_${channel.id}] Adjunto de grupo ${remoteJid} ignorado (groupPolicy=IGNORE).`,
           );
           continue;
         }
@@ -380,7 +443,7 @@ export class WhatsappChannelService implements OnModuleInit {
           );
           if (!allowedGroupSet.has(remoteJid)) {
             this.logger.log(
-              `[WhatsApp company_${companyId}] Adjunto de grupo ${remoteJid} omitido: no está en los ${allowedGroupSet.size} grupo(s) autorizado(s).`,
+              `[WhatsApp channel_${channel.id}] Adjunto de grupo ${remoteJid} omitido: no está en los ${allowedGroupSet.size} grupo(s) autorizado(s).`,
             );
             continue;
           }
@@ -394,9 +457,9 @@ export class WhatsappChannelService implements OnModuleInit {
         continue;
       }
 
-      // Idempotencia
+      // Idempotencia por canal
       const alreadyExists = await this.whatsappMessageModel.findOne({
-        where: { companyId, externalMessageId },
+        where: { companyId: resolvedCompanyId, channelId: channel.id, externalMessageId },
         attributes: ['id'],
       });
       if (alreadyExists) {
@@ -420,7 +483,7 @@ export class WhatsappChannelService implements OnModuleInit {
         );
         groupName =
           matchedSaved?.name ||
-          (await this.baileysService.resolveGroupSubject?.(companyId, remoteJid)) ||
+          (await this.baileysService.resolveGroupSubject?.(channel.id, remoteJid)) ||
           remoteJid;
       }
 
@@ -438,8 +501,9 @@ export class WhatsappChannelService implements OnModuleInit {
         );
         if (!allowedSet.has(senderPhone)) {
           await this.whatsappMessageModel.create({
-            companyId,
+            companyId: resolvedCompanyId,
             channelId: channel.id,
+            userId: ownerUserId,
             externalMessageId,
             senderPhone,
             replyJid: remoteJid,
@@ -457,8 +521,9 @@ export class WhatsappChannelService implements OnModuleInit {
 
       if (imgMsg && !channel.processImages) {
         await this.whatsappMessageModel.create({
-          companyId,
+          companyId: resolvedCompanyId,
           channelId: channel.id,
+          userId: ownerUserId,
           externalMessageId,
           senderPhone,
           replyJid: remoteJid,
@@ -486,8 +551,9 @@ export class WhatsappChannelService implements OnModuleInit {
         : `whatsapp_img_${externalMessageId.slice(-8)}.jpg`;
 
       const record = await this.whatsappMessageModel.create({
-        companyId,
+        companyId: resolvedCompanyId,
         channelId: channel.id,
+        userId: ownerUserId,
         externalMessageId,
         senderPhone,
         replyJid: remoteJid,
@@ -520,7 +586,7 @@ export class WhatsappChannelService implements OnModuleInit {
         }
 
         const mediaBuffer = await this.baileysService.downloadMessageMedia(
-          companyId,
+          channel.id,
           msg,
         );
 
@@ -538,11 +604,12 @@ export class WhatsappChannelService implements OnModuleInit {
 
         const { document, isDuplicate } =
           await this.documentsService.ingestPdfFromChannel({
-            companyId,
+            companyId: resolvedCompanyId,
             buffer: pdfBuffer,
             originalName: finalFileName,
             mimeType: 'application/pdf',
             source: DocumentSource.WHATSAPP,
+            actorUserId: ownerUserId ?? undefined,
             channelContextLabel: groupName
               ? `WhatsApp Grupo '${groupName}' · ${senderName || `+${senderPhone}`}`
               : `WhatsApp ${senderName ? `${senderName} (+${senderPhone})` : `+${senderPhone}`}`,
@@ -567,17 +634,37 @@ export class WhatsappChannelService implements OnModuleInit {
           type: 'channel.whatsapp_received',
           title: '📲 Comprobante recibido por WhatsApp',
           body: `Se recibió '${finalFileName}' desde ${senderName || `+${senderPhone}`}${groupName ? ` en grupo '${groupName}'` : ''}.`,
-          companyId,
-          extraData: { documentId: document.id, whatsappMessageId: record.id, link: '/whatsapp' },
+          companyId: resolvedCompanyId,
+          extraData: {
+            documentId: document.id,
+            whatsappMessageId: record.id,
+            channelId: channel.id,
+            userId: ownerUserId,
+            link: '/whatsapp',
+          },
         });
 
-        this.gateway?.emitToCompany(companyId, 'whatsapp:message_received', {
-          companyId,
+        const wsPayload = {
+          companyId: resolvedCompanyId,
+          channelId: channel.id,
+          userId: ownerUserId,
           messageId: record.id,
           status: WhatsappMessageStatus.PROCESSED,
           documentId: document.id,
           fileName: finalFileName,
-        });
+        };
+        if (ownerUserId) {
+          this.gateway?.emitEventToUser?.(
+            ownerUserId,
+            'whatsapp:message_received',
+            wsPayload,
+          );
+        }
+        this.gateway?.emitToCompany(
+          resolvedCompanyId,
+          'whatsapp:message_received',
+          wsPayload,
+        );
       } catch (err: any) {
         const errMsg =
           err?.message || 'Error al descargar o procesar archivo de WhatsApp';
@@ -591,12 +678,26 @@ export class WhatsappChannelService implements OnModuleInit {
           lastSyncMessage: errMsg,
         });
 
-        this.gateway?.emitToCompany(companyId, 'whatsapp:message_received', {
-          companyId,
+        const errPayload = {
+          companyId: resolvedCompanyId,
+          channelId: channel.id,
+          userId: ownerUserId,
           messageId: record.id,
           status: WhatsappMessageStatus.ERROR,
           fileName: reportedFileName,
-        });
+        };
+        if (ownerUserId) {
+          this.gateway?.emitEventToUser?.(
+            ownerUserId,
+            'whatsapp:message_received',
+            errPayload,
+          );
+        }
+        this.gateway?.emitToCompany(
+          resolvedCompanyId,
+          'whatsapp:message_received',
+          errPayload,
+        );
       }
     }
   }
@@ -607,7 +708,13 @@ export class WhatsappChannelService implements OnModuleInit {
     const limit = Number(query.limit || 25);
     const offset = (page - 1) * limit;
 
-    const where: any = { companyId };
+    const filterUserId = resolveInboxFilterUserId(user, query.userId);
+    const statsWhere: any = { companyId };
+    if (filterUserId !== undefined) {
+      statsWhere.userId = filterUserId;
+    }
+
+    const where: any = { ...statsWhere };
     if (query.status) {
       where.status = query.status;
     }
@@ -640,6 +747,12 @@ export class WhatsappChannelService implements OnModuleInit {
             attributes: ['id', 'originalName', 'documentType', 'totalAmount', 'status'],
             required: false,
           },
+          {
+            model: Users,
+            as: 'user',
+            attributes: ['id', 'name', 'lastName', 'username', 'email'],
+            required: false,
+          },
         ],
         order: [
           ['receivedAt', 'DESC'],
@@ -648,18 +761,18 @@ export class WhatsappChannelService implements OnModuleInit {
         limit,
         offset,
       }),
-      this.whatsappMessageModel.count({ where: { companyId } }),
+      this.whatsappMessageModel.count({ where: statsWhere }),
       this.whatsappMessageModel.count({
-        where: { companyId, status: WhatsappMessageStatus.PROCESSED },
+        where: { ...statsWhere, status: WhatsappMessageStatus.PROCESSED },
       }),
       this.whatsappMessageModel.count({
-        where: { companyId, status: WhatsappMessageStatus.SKIPPED },
+        where: { ...statsWhere, status: WhatsappMessageStatus.SKIPPED },
       }),
       this.whatsappMessageModel.count({
-        where: { companyId, status: WhatsappMessageStatus.REJECTED_SENDER },
+        where: { ...statsWhere, status: WhatsappMessageStatus.REJECTED_SENDER },
       }),
       this.whatsappMessageModel.count({
-        where: { companyId, status: WhatsappMessageStatus.ERROR },
+        where: { ...statsWhere, status: WhatsappMessageStatus.ERROR },
       }),
     ]);
 

@@ -123,6 +123,13 @@ export class DocumentsController {
     return this.documentsService.getFacets(tenantCompanyId);
   }
 
+  @Get('uploaders')
+  @RequirePermission('VIEW_DOCUMENTS')
+  getUploaders(@GetUser() user: any) {
+    const tenantCompanyId = this.assertTenantCompany(user);
+    return this.documentsService.listUploaders(tenantCompanyId);
+  }
+
   @Get('forms')
   @RequirePermission('VIEW_DOCUMENTS')
   getAvailableForms(@GetUser() user: any) {

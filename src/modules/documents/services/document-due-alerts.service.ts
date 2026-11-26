@@ -27,8 +27,8 @@ export class DocumentDueAlertsService {
 
   @Cron(CronExpression.EVERY_DAY_AT_9AM)
   async handleDailyDueCheck(): Promise<void> {
-    if (process.env.NODE_ENV === 'test') return;
-    await this.dispatchUpcomingAndOverdueAlerts();
+    // Desactivado: la gestión de vencimientos y estados de pago está deshabilitada.
+    return;
   }
 
   async dispatchUpcomingAndOverdueAlerts(

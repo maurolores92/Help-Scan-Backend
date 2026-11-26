@@ -17,6 +17,8 @@ import {
   EmailSyncStatus,
 } from '../models/company-email-channel.model';
 import { EmailMessage, EmailMessageStatus } from '../models/email-message.model';
+import { CompanyWhatsappChannel } from '../models/company-whatsapp-channel.model';
+import { CompanyTelegramChannel } from '../models/company-telegram-channel.model';
 import { UpsertEmailChannelDto } from '../dto/upsert-email-channel.dto';
 import { TestEmailConnectionDto } from '../dto/test-email-connection.dto';
 import { QueryEmailMessagesDto } from '../dto/query-email-messages.dto';
@@ -24,6 +26,7 @@ import { FetchedEmailItem, ImapClientService } from './imap-client.service';
 import { DocumentsService } from '../../documents/documents.service';
 import { Document, DocumentSource } from '../../documents/document.model';
 import { Company, CompanyStatus } from '../../companies/company.model';
+import { Users } from '../../users/users.model';
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../audit/audit.model';
 import { NotificationsService } from '../../notifications/notifications.service';
@@ -32,7 +35,6 @@ import {
   decryptFtpSecret,
   encryptFtpSecret,
 } from '../../../common/utils/vault-crypto.util';
-import { isPlatformSuperAdmin } from '../../../common/utils/tenant-scope.util';
 import { detectReceiptInEmailBody } from '../helpers/email-receipt-detector.helper';
 import {
   convertImageBufferToPdf,
@@ -44,12 +46,17 @@ import {
   normalizeAllowedEmailSenders,
   normalizeEmailSenderRule,
 } from '../helpers/email-sender-policy.helper';
+import {
+  isCompanyAdminUser,
+  resolveChannelOwnerContext,
+  resolveInboxFilterUserId,
+} from '../helpers/channel-user-scope.helper';
 
 @Injectable()
 export class ChannelsService {
   private readonly logger = new Logger(ChannelsService.name);
-  private readonly syncingCompanies = new Set<number>();
-  private channelChangeListeners: Array<(companyId: number) => void> = [];
+  private readonly syncingChannels = new Set<number>();
+  private channelChangeListeners: Array<(channelId: number) => void> = [];
 
   constructor(
     @InjectModel(CompanyEmailChannel)
@@ -63,37 +70,31 @@ export class ChannelsService {
     private readonly auditService: AuditService,
     private readonly notificationsService: NotificationsService,
     @Optional() private readonly notificationsGateway?: NotificationsGateway,
+    @Optional()
+    @InjectModel(Users)
+    private readonly usersModel?: typeof Users,
+    @Optional()
+    @InjectModel(CompanyWhatsappChannel)
+    private readonly whatsappChannelModel?: typeof CompanyWhatsappChannel,
+    @Optional()
+    @InjectModel(CompanyTelegramChannel)
+    private readonly telegramChannelModel?: typeof CompanyTelegramChannel,
   ) {}
 
-  registerChannelChangeListener(listener: (companyId: number) => void): void {
+  registerChannelChangeListener(listener: (channelId: number) => void): void {
     this.channelChangeListeners.push(listener);
   }
 
-  private notifyChannelChanged(companyId: number): void {
+  private notifyChannelChanged(channelId: number): void {
     for (const listener of this.channelChangeListeners) {
       try {
-        listener(companyId);
+        listener(channelId);
       } catch { }
     }
   }
 
   private generateWebhookSecret(): string {
     return crypto.randomBytes(20).toString('hex');
-  }
-
-  private assertTenantUser(user: { companyId?: number | null; role?: string }): number {
-    if (isPlatformSuperAdmin(user)) {
-      throw new ForbiddenException(
-        'El Super Administrador de plataforma no gestiona buzones de correo privados de compañías.',
-      );
-    }
-    const companyId = Number(user?.companyId);
-    if (!Number.isInteger(companyId) || companyId <= 0) {
-      throw new ForbiddenException(
-        'Acceso denegado: Se requiere pertenecer a una compañía activa.',
-      );
-    }
-    return companyId;
   }
 
   private toSafeChannelResponse(channel: CompanyEmailChannel | null) {
@@ -111,10 +112,14 @@ export class ChannelsService {
     };
   }
 
-  async getEmailChannelConfig(user: any) {
-    const companyId = this.assertTenantUser(user);
+  async getEmailChannelConfig(user: any, targetUserId?: number | string) {
+    const ctx = await resolveChannelOwnerContext(
+      user,
+      targetUserId,
+      this.usersModel,
+    );
     const channel = await this.emailChannelModel.findOne({
-      where: { companyId },
+      where: { companyId: ctx.companyId, userId: ctx.userId },
     });
 
     if (channel && !channel.webhookSecret) {
@@ -127,9 +132,20 @@ export class ChannelsService {
     };
   }
 
-  async upsertEmailChannelConfig(dto: UpsertEmailChannelDto, user: any) {
-    const companyId = this.assertTenantUser(user);
-    const existing = await this.emailChannelModel.findOne({ where: { companyId } });
+  async upsertEmailChannelConfig(
+    dto: UpsertEmailChannelDto,
+    user: any,
+    targetUserId?: number | string,
+  ) {
+    const ctx = await resolveChannelOwnerContext(
+      user,
+      targetUserId,
+      this.usersModel,
+    );
+    const { companyId, userId } = ctx;
+    const existing = await this.emailChannelModel.findOne({
+      where: { companyId, userId },
+    });
 
     let encryptedPassword = existing?.encryptedPassword || '';
     if (dto.password && dto.password.trim().length > 0) {
@@ -172,6 +188,7 @@ export class ChannelsService {
 
     const payload = {
       companyId,
+      userId,
       provider: dto.provider || EmailProviderType.GMAIL,
       host: dto.host.trim(),
       port: Number(dto.port) || 993,
@@ -199,7 +216,7 @@ export class ChannelsService {
       saved = await this.emailChannelModel.create(payload as never);
     }
 
-    this.notifyChannelChanged(companyId);
+    this.notifyChannelChanged(saved.id);
 
     await this.auditService.log({
       action: existing ? AuditAction.UPDATE : AuditAction.CREATE,
@@ -224,7 +241,8 @@ export class ChannelsService {
       title: '📧 Canal de Correo Configurado',
       body: `Se conectó la casilla '${saved.emailUser}' para ingesta automática por correo o webhook.`,
       companyId,
-      extraData: { channelId: saved.id, link: '/channels' },
+      targetUserId: userId,
+      extraData: { channelId: saved.id, userId, link: '/channels' },
     });
 
     return {
@@ -233,9 +251,15 @@ export class ChannelsService {
     };
   }
 
-  async regenerateWebhookSecret(user: any) {
-    const companyId = this.assertTenantUser(user);
-    const channel = await this.emailChannelModel.findOne({ where: { companyId } });
+  async regenerateWebhookSecret(user: any, targetUserId?: number | string) {
+    const ctx = await resolveChannelOwnerContext(
+      user,
+      targetUserId,
+      this.usersModel,
+    );
+    const channel = await this.emailChannelModel.findOne({
+      where: { companyId: ctx.companyId, userId: ctx.userId },
+    });
     if (!channel) {
       throw new NotFoundException(
         'Primero configurá y guardá tu canal de correo para generar la URL del webhook.',
@@ -249,8 +273,8 @@ export class ChannelsService {
       action: AuditAction.UPDATE,
       entity: 'CompanyEmailChannel',
       entityId: channel.id,
-      companyId,
-      userId: user.id,
+      companyId: ctx.companyId,
+      userId: ctx.actorUserId,
       description: 'Regeneró el token secreto del Webhook de correo entrante',
     });
 
@@ -260,12 +284,22 @@ export class ChannelsService {
     };
   }
 
-  async testEmailConnection(dto: TestEmailConnectionDto, user: any) {
-    const companyId = this.assertTenantUser(user);
+  async testEmailConnection(
+    dto: TestEmailConnectionDto,
+    user: any,
+    targetUserId?: number | string,
+  ) {
+    const ctx = await resolveChannelOwnerContext(
+      user,
+      targetUserId,
+      this.usersModel,
+    );
     let plainPassword = dto.password?.trim() || '';
 
     if (!plainPassword) {
-      const existing = await this.emailChannelModel.findOne({ where: { companyId } });
+      const existing = await this.emailChannelModel.findOne({
+        where: { companyId: ctx.companyId, userId: ctx.userId },
+      });
       if (!existing?.encryptedPassword) {
         throw new BadRequestException(
           'Ingresa la contraseña o Contraseña de Aplicación para probar la conexión.',
@@ -288,9 +322,13 @@ export class ChannelsService {
     }
   }
 
-  async triggerManualSync(user: any) {
-    const companyId = this.assertTenantUser(user);
-    return this.syncCompanyEmailChannel(companyId, user.id);
+  async triggerManualSync(user: any, targetUserId?: number | string) {
+    const ctx = await resolveChannelOwnerContext(
+      user,
+      targetUserId,
+      this.usersModel,
+    );
+    return this.syncCompanyEmailChannel(ctx.companyId, ctx.actorUserId, undefined, ctx.userId);
   }
 
   /**
@@ -329,8 +367,14 @@ export class ChannelsService {
       };
     }
 
+    const ownerUserId = channel.userId ?? actorUserId ?? null;
+
     const alreadyStored = await this.emailMessageModel.findOne({
-      where: { companyId, messageId: item.messageId },
+      where: {
+        companyId,
+        channelId: channel.id,
+        messageId: item.messageId,
+      },
       attributes: ['id'],
     });
     if (alreadyStored) {
@@ -347,6 +391,7 @@ export class ChannelsService {
     const emailRecord = await this.emailMessageModel.create({
       companyId,
       channelId: channel.id,
+      userId: ownerUserId,
       messageId: item.messageId,
       imapUid: item.uid || 0,
       senderName: item.senderName,
@@ -407,7 +452,7 @@ export class ChannelsService {
           mimeType: 'application/pdf',
           source: DocumentSource.EMAIL,
           sourceEmailId: emailRecord.id,
-          actorUserId,
+          actorUserId: ownerUserId,
           channelContextLabel: `${originLabel === 'WEBHOOK' ? 'Webhook ' : ''}De: ${item.senderEmail}`,
         });
 
@@ -448,7 +493,7 @@ export class ChannelsService {
               mimeType: 'application/pdf',
               source: DocumentSource.EMAIL,
               sourceEmailId: emailRecord.id,
-              actorUserId,
+              actorUserId: ownerUserId,
               channelContextLabel: `Cuerpo Email - ${item.senderEmail}`,
             });
 
@@ -528,6 +573,8 @@ export class ChannelsService {
 
     this.notificationsGateway?.emitToCompany(companyId, 'email:received', {
       companyId,
+      userId: ownerUserId,
+      channelId: channel.id,
       emailMessageId: emailRecord.id,
       status: emailRecord.status,
       documentIds: generatedIds,
@@ -535,6 +582,19 @@ export class ChannelsService {
       subject: item.subject,
       origin: originLabel,
     });
+    if (ownerUserId) {
+      this.notificationsGateway?.emitEventToUser?.(ownerUserId, 'email:received', {
+        companyId,
+        userId: ownerUserId,
+        channelId: channel.id,
+        emailMessageId: emailRecord.id,
+        status: emailRecord.status,
+        documentIds: generatedIds,
+        senderEmail: item.senderEmail,
+        subject: item.subject,
+        origin: originLabel,
+      });
+    }
 
     return {
       alreadyStored: false,
@@ -554,19 +614,26 @@ export class ChannelsService {
     providedToken: string,
     rawBody: any,
   ) {
-    const channel = await this.emailChannelModel.findOne({ where: { companyId } });
-    if (!channel) {
+    const cleanToken = (providedToken || '').trim();
+    const companyChannels = await this.emailChannelModel.findAll({
+      where: { companyId },
+    });
+    if (!companyChannels || companyChannels.length === 0) {
       throw new NotFoundException('La compañía no tiene un canal de correo configurado.');
     }
 
-    const expectedToken = (channel.webhookSecret || '').trim();
-    const cleanToken = (providedToken || '').trim();
-    if (
-      !expectedToken ||
-      !cleanToken ||
-      expectedToken.length !== cleanToken.length ||
-      !crypto.timingSafeEqual(Buffer.from(expectedToken), Buffer.from(cleanToken))
-    ) {
+    const channel = companyChannels.find((ch) => {
+      const expectedToken = (ch.webhookSecret || '').trim();
+      if (!expectedToken || !cleanToken || expectedToken.length !== cleanToken.length) {
+        return false;
+      }
+      return crypto.timingSafeEqual(
+        Buffer.from(expectedToken),
+        Buffer.from(cleanToken),
+      );
+    });
+
+    if (!channel) {
       throw new UnauthorizedException('Token de webhook inválido para esta compañía.');
     }
 
@@ -620,20 +687,36 @@ export class ChannelsService {
     };
   }
 
-  async syncCompanyEmailChannel(companyId: number, actorUserId?: number | null) {
-    if (this.syncingCompanies.has(companyId)) {
+  async syncCompanyEmailChannel(
+    companyId: number,
+    actorUserId?: number | null,
+    targetChannelId?: number | null,
+    targetUserId?: number | null,
+  ) {
+    const channel = targetChannelId
+      ? await this.emailChannelModel.findByPk(targetChannelId)
+      : targetUserId
+        ? await this.emailChannelModel.findOne({
+            where: { companyId, userId: targetUserId },
+          })
+        : actorUserId
+          ? await this.emailChannelModel.findOne({
+              where: { companyId, userId: actorUserId },
+            })
+          : await this.emailChannelModel.findOne({ where: { companyId } });
+
+    if (!channel) {
+      throw new NotFoundException('No hay un canal de correo configurado para este usuario.');
+    }
+
+    if (this.syncingChannels.has(channel.id)) {
       return {
         skipped: true,
-        message: 'Ya existe una sincronización en curso para esta compañía.',
+        message: 'Ya existe una sincronización en curso para esta casilla.',
       };
     }
 
-    const channel = await this.emailChannelModel.findOne({ where: { companyId } });
-    if (!channel) {
-      throw new NotFoundException('La compañía no tiene un canal de correo configurado.');
-    }
-
-    this.syncingCompanies.add(companyId);
+    this.syncingChannels.add(channel.id);
     const syncStartedAt = new Date();
     let processedEmails = 0;
     let createdDocuments = 0;
@@ -723,17 +806,24 @@ export class ChannelsService {
         message: errMsg,
       };
     } finally {
-      this.syncingCompanies.delete(companyId);
+      this.syncingChannels.delete(channel.id);
     }
   }
 
   async listEmailMessages(query: QueryEmailMessagesDto, user: any) {
-    const companyId = this.assertTenantUser(user);
+    const ctx = await resolveChannelOwnerContext(user);
+    const companyId = ctx.companyId;
+    const filterUserId = resolveInboxFilterUserId(user, query.userId);
     const page = Number(query.page || 1);
     const limit = Number(query.limit || 25);
     const offset = (page - 1) * limit;
 
-    const where: any = { companyId };
+    const statsWhere: any = { companyId };
+    if (filterUserId !== undefined) {
+      statsWhere.userId = filterUserId;
+    }
+
+    const where: any = { ...statsWhere };
     if (query.status) {
       where.status = query.status;
     }
@@ -764,24 +854,30 @@ export class ChannelsService {
             attributes: ['id', 'originalName', 'documentType', 'totalAmount', 'status'],
             required: false,
           },
+          {
+            model: Users,
+            as: 'user',
+            attributes: ['id', 'name', 'lastName', 'username', 'email'],
+            required: false,
+          },
         ],
         attributes: { exclude: ['bodyHtmlSanitized'] },
         order: [['receivedAt', 'DESC'], ['id', 'DESC']],
         limit,
         offset,
       }),
-      this.emailMessageModel.count({ where: { companyId } }),
+      this.emailMessageModel.count({ where: statsWhere }),
       this.emailMessageModel.count({
-        where: { companyId, status: EmailMessageStatus.PROCESSED },
+        where: { ...statsWhere, status: EmailMessageStatus.PROCESSED },
       }),
       this.emailMessageModel.count({
-        where: { companyId, status: EmailMessageStatus.SYNTHESIZED_BODY },
+        where: { ...statsWhere, status: EmailMessageStatus.SYNTHESIZED_BODY },
       }),
       this.emailMessageModel.count({
-        where: { companyId, status: EmailMessageStatus.SKIPPED },
+        where: { ...statsWhere, status: EmailMessageStatus.SKIPPED },
       }),
       this.emailMessageModel.count({
-        where: { companyId, status: EmailMessageStatus.ERROR },
+        where: { ...statsWhere, status: EmailMessageStatus.ERROR },
       }),
     ]);
 
@@ -800,9 +896,14 @@ export class ChannelsService {
   }
 
   async getEmailMessageById(id: number, user: any) {
-    const companyId = this.assertTenantUser(user);
+    const ctx = await resolveChannelOwnerContext(user);
+    const where: any = { id, companyId: ctx.companyId };
+    if (!ctx.isCompanyAdmin) {
+      where.userId = ctx.actorUserId;
+    }
+
     const record = await this.emailMessageModel.findOne({
-      where: { id, companyId },
+      where,
       include: [
         {
           model: Document,
@@ -810,11 +911,17 @@ export class ChannelsService {
           attributes: ['id', 'originalName', 'documentType', 'totalAmount', 'status', 'issuerName'],
           required: false,
         },
+        {
+          model: Users,
+          as: 'user',
+          attributes: ['id', 'name', 'lastName', 'username', 'email'],
+          required: false,
+        },
       ],
     });
 
     if (!record) {
-      throw new NotFoundException('Correo electrónico no encontrado en su compañía.');
+      throw new NotFoundException('Correo electrónico no encontrado o sin acceso.');
     }
 
     return record;
@@ -825,10 +932,15 @@ export class ChannelsService {
    * en un documento PDF cifrado dentro de la bóveda para procesarlo con la IA.
    */
   async rescueEmailMessageToDocument(id: number, user: any) {
-    const companyId = this.assertTenantUser(user);
-    const email = await this.emailMessageModel.findOne({ where: { id, companyId } });
+    const ctx = await resolveChannelOwnerContext(user);
+    const companyId = ctx.companyId;
+    const where: any = { id, companyId };
+    if (!ctx.isCompanyAdmin) {
+      where.userId = ctx.actorUserId;
+    }
+    const email = await this.emailMessageModel.findOne({ where });
     if (!email) {
-      throw new NotFoundException('Correo electrónico no encontrado en su compañía.');
+      throw new NotFoundException('Correo electrónico no encontrado o sin acceso.');
     }
 
     if (email.documentId) {
@@ -868,7 +980,7 @@ export class ChannelsService {
       mimeType: 'application/pdf',
       source: DocumentSource.EMAIL,
       sourceEmailId: email.id,
-      actorUserId: user.id,
+      actorUserId: email.userId ?? ctx.actorUserId,
       channelContextLabel: `Rescate manual - ${email.senderEmail}`,
     });
 
@@ -897,6 +1009,76 @@ export class ChannelsService {
       message: 'Correo convertido a PDF y encolado para extracción inteligente.',
       emailMessage: email,
       document,
+    };
+  }
+
+  /**
+   * Devuelve el listado de usuarios activos de la compañía junto con un resumen de sus
+   * canales personales configurados (Email, WhatsApp, Telegram).
+   */
+  async getCompanyUsersChannelsOverview(user: any) {
+    const ctx = await resolveChannelOwnerContext(user, undefined, this.usersModel);
+    if (!this.usersModel) {
+      return { users: [] };
+    }
+
+    const whereUsers: any = { companyId: ctx.companyId };
+    if (!ctx.isCompanyAdmin) {
+      whereUsers.id = ctx.actorUserId;
+    }
+
+    const [users, emailChannels, whatsappChannels, telegramChannels] = await Promise.all([
+      this.usersModel.findAll({
+        where: whereUsers,
+        attributes: ['id', 'name', 'lastName', 'username', 'email', 'status', 'isAdmin'],
+        order: [
+          ['isAdmin', 'DESC'],
+          ['name', 'ASC'],
+          ['id', 'ASC'],
+        ],
+      }),
+      this.emailChannelModel.findAll({
+        where: { companyId: ctx.companyId },
+        attributes: ['id', 'userId', 'emailUser', 'provider', 'isActive', 'lastSyncStatus'],
+      }),
+      this.whatsappChannelModel
+        ? this.whatsappChannelModel.findAll({
+            where: { companyId: ctx.companyId },
+            attributes: ['id', 'userId', 'connectionStatus', 'connectedPhone', 'isActive'],
+          })
+        : Promise.resolve([]),
+      this.telegramChannelModel
+        ? this.telegramChannelModel.findAll({
+            where: { companyId: ctx.companyId },
+            attributes: ['id', 'userId', 'botUsername', 'isActive', 'lastSyncStatus'],
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const emailByUser = new Map<number, any>(
+      emailChannels.filter((c) => c.userId).map((c) => [Number(c.userId), c.toJSON()]),
+    );
+    const waByUser = new Map<number, any>(
+      whatsappChannels.filter((c) => c.userId).map((c) => [Number(c.userId), c.toJSON()]),
+    );
+    const tgByUser = new Map<number, any>(
+      telegramChannels.filter((c) => c.userId).map((c) => [Number(c.userId), c.toJSON()]),
+    );
+
+    return {
+      isCompanyAdmin: ctx.isCompanyAdmin,
+      users: users.map((u) => {
+        const plain = u.toJSON() as any;
+        const uid = Number(plain.id);
+        return {
+          ...plain,
+          channels: {
+            email: emailByUser.get(uid) || null,
+            whatsapp: waByUser.get(uid) || null,
+            telegram: tgByUser.get(uid) || null,
+          },
+        };
+      }),
     };
   }
 }

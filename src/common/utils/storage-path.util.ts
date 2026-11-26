@@ -260,13 +260,41 @@ export function getTenantQuarantinePath(companyId: number | string): string {
 
 /**
  * Retorna la carpeta persistente donde se almacenan las credenciales de sesión Baileys (WhatsApp QR)
- * aislada por compañía dentro del volumen persistente `uploads/tenancy/`.
+ * aislada por compañía y por usuario (`uploads/tenancy/company_<id>/whatsapp_sessions/user_<userId>`).
+ * Si existe una carpeta legada `whatsapp_session` previa, la migra automáticamente al primer usuario
+ * que solicite la sesión (típico: el administrador migrado).
  */
-export function getTenantWhatsappSessionPath(companyId: number | string): string {
+export function getTenantWhatsappSessionPath(
+  companyId: number | string,
+  userId?: number | string | null,
+): string {
   const { baseDir } = ensureTenantDirectories(companyId);
-  const sessionDir = join(baseDir, 'whatsapp_session');
-  safeEnsureDir(sessionDir);
-  return sessionDir;
+  const legacySessionDir = join(baseDir, 'whatsapp_session');
+
+  if (userId !== undefined && userId !== null && Number(userId) > 0) {
+    const safeUserId = sanitizeTenantId(userId);
+    const sessionsRoot = join(baseDir, 'whatsapp_sessions');
+    safeEnsureDir(sessionsRoot);
+    const userSessionDir = join(sessionsRoot, `user_${safeUserId}`);
+
+    if (
+      !existsSync(userSessionDir) &&
+      existsSync(legacySessionDir) &&
+      readdirSync(legacySessionDir).length > 0
+    ) {
+      try {
+        renameSync(legacySessionDir, userSessionDir);
+      } catch {
+        safeEnsureDir(userSessionDir);
+      }
+    }
+
+    safeEnsureDir(userSessionDir);
+    return userSessionDir;
+  }
+
+  safeEnsureDir(legacySessionDir);
+  return legacySessionDir;
 }
 
 /**

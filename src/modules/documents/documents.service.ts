@@ -27,6 +27,7 @@ import { AuditAction } from '../audit/audit.model';
 import { NotificationsService } from '../notifications/notifications.service';
 import { Company } from '../companies/company.model';
 import { Client } from '../clients/client.model';
+import { Users } from '../users/users.model';
 import { ClientsService } from '../clients/clients.service';
 import { TenantQuotasService } from '../plans/services/tenant-quotas.service';
 import {
@@ -566,16 +567,6 @@ export class DocumentsService {
         .catch(() => null);
     }
 
-    let autoMatchedResult: { autoMatchedCount: number; autoMatchedLinks: any[] } = {
-      autoMatchedCount: 0,
-      autoMatchedLinks: [],
-    };
-    if (this.documentLinksService) {
-      autoMatchedResult = await this.documentLinksService
-        .runAutoExactMatchingForDocument(doc.id, doc.companyId, userId)
-        .catch(() => ({ autoMatchedCount: 0, autoMatchedLinks: [] }));
-    }
-
     const refreshedDoc = await this.findById(doc.id, companyId).catch(() => doc);
 
     await this.auditService.log({
@@ -600,7 +591,6 @@ export class DocumentsService {
     return {
       message: 'Documento validado y confirmado exitosamente',
       document: refreshedDoc,
-      autoMatchedCount: autoMatchedResult.autoMatchedCount,
     };
   }
 
@@ -701,6 +691,7 @@ export class DocumentsService {
       include: [
         { model: Company, attributes: ['id', 'name', 'slug'] },
         { model: Client, attributes: ['id', 'name', 'tradeName', 'taxId', 'taxIdType', 'taxCondition', 'city', 'province'] },
+        { model: Users, attributes: ['id', 'name', 'lastName', 'username', 'email'], required: false },
         { model: DocumentFormRecord, attributes: ['id', 'formSchemaId', 'documentType', 'formData', 'schemaVersion', 'validatedAt'] },
       ],
     });
@@ -726,6 +717,7 @@ export class DocumentsService {
       include: [
         { model: Company, attributes: ['id', 'name', 'slug'] },
         { model: Client, attributes: ['id', 'name', 'tradeName', 'taxId', 'taxIdType', 'taxCondition', 'email', 'phone', 'city', 'province'] },
+        { model: Users, attributes: ['id', 'name', 'lastName', 'username', 'email'], required: false },
         { model: DocumentFormRecord, attributes: ['id', 'formSchemaId', 'documentType', 'formData', 'schemaVersion', 'validatedAt'] },
       ],
     });
@@ -874,5 +866,21 @@ export class DocumentsService {
       count: deletedCount,
       message: `Se eliminaron ${deletedCount} documento(s) correctamente`,
     };
+  }
+
+  /**
+   * Lista usuarios de la compañía que pueden figurar como origen/carga de documentos.
+   */
+  async listUploaders(companyId: number) {
+    const scopedCompanyId = this.assertValidCompanyScope(companyId);
+
+    return Users.findAll({
+      where: { companyId: scopedCompanyId },
+      attributes: ['id', 'name', 'lastName', 'username', 'email', 'status'],
+      order: [
+        ['name', 'ASC'],
+        ['id', 'ASC'],
+      ],
+    });
   }
 }

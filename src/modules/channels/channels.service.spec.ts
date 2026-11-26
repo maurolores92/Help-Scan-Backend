@@ -247,7 +247,10 @@ describe('ChannelsService (Lista Blanca de Correo IMAP & Webhook)', () => {
     };
 
     const { service, emailMessageModel, documentsService } = buildService({
-      emailChannelModel: { findOne: jest.fn().mockResolvedValue(channel) },
+      emailChannelModel: {
+        findOne: jest.fn().mockResolvedValue(channel),
+        findAll: jest.fn().mockResolvedValue([channel]),
+      },
     });
 
     const res = await service.ingestEmailFromWebhook(10, 'secret-token-123', {

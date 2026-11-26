@@ -9,6 +9,7 @@ import {
   Table,
 } from 'sequelize-typescript';
 import { Company } from '../../companies/company.model';
+import { Users } from '../../users/users.model';
 import { Document } from '../../documents/document.model';
 import { CompanyTelegramChannel } from './company-telegram-channel.model';
 
@@ -46,6 +47,13 @@ export class TelegramMessage extends Model {
     constraints: false,
   })
   declare channel: CompanyTelegramChannel | null;
+
+  @ForeignKey(() => Users)
+  @Column({ type: DataType.INTEGER, allowNull: true, field: 'user_id' })
+  declare userId: number | null;
+
+  @BelongsTo(() => Users, { foreignKey: 'userId', constraints: false })
+  declare user: Users | null;
 
   @Column({
     type: DataType.STRING(120),
