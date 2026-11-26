@@ -211,3 +211,36 @@ export function sanitizeSecurityPayload(value: any, depth = 0): any {
   }
   return output;
 }
+
+const SENSITIVE_TEXT_PATTERNS: RegExp[] = [
+  /(Bearer\s+)[A-Za-z0-9\-._~+/]+=*/gi,
+  /((?:password|passwd|secret|token|authorization|cookie|api_key|apikey|x-monitor-key|x-api-key)\s*[:=]\s*["']?)([^\s,"'}\]]+)/gi,
+];
+
+/**
+ * Serializa y sanitiza el detalle técnico de un evento en formato JSON string
+ * `{"message":"...","stack":"..."}` removiendo credenciales, tokens y headers sensibles.
+ */
+export function sanitizeSecurityDetails(
+  message?: string | null,
+  stack?: string | null,
+): string | null {
+  const cleanText = (input?: string | null, maxLen = 2000): string | undefined => {
+    if (!input) return undefined;
+    let text = String(input).trim();
+    if (!text) return undefined;
+    for (const pattern of SENSITIVE_TEXT_PATTERNS) {
+      text = text.replace(pattern, '$1[OCULTO]');
+    }
+    return text.slice(0, maxLen);
+  };
+
+  const safeMessage = cleanText(message, 2000);
+  const safeStack = cleanText(stack, 6000);
+  if (!safeMessage && !safeStack) return null;
+
+  return JSON.stringify({
+    message: safeMessage || '',
+    ...(safeStack ? { stack: safeStack } : {}),
+  });
+}

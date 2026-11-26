@@ -19,7 +19,11 @@ import { Public } from '../auth/decorators/public.decorator';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { assertPlatformSuperAdmin } from '../../common/utils/tenant-scope.util';
 import { SecurityService } from './services/security.service';
+import { SecurityMonitorBridgeService } from './services/security-monitor-bridge.service';
+import { MonitorBridgeGuard } from './guards/monitor-bridge.guard';
 import {
+  QueryAccessLogsDto,
+  QueryBridgeSummaryDto,
   QuerySecurityErrorsDto,
   QuerySecurityIpsDto,
   QuerySecurityLoginsDto,
@@ -32,7 +36,8 @@ import { resolveJwtSecret } from '../../config/env-resolver';
 
 /**
  * Controlador de Monitoreo de Seguridad.
- * Todos los endpoints de lectura y bloqueo están restringidos al Super Administrador global.
+ * Incluye endpoints internos para Super Administrador y endpoints puente (`x-monitor-key`)
+ * para el dashboard externo HelpCopies Monitor.
  */
 @Controller('security')
 @UseGuards(JwtAuthGuard)
@@ -40,7 +45,32 @@ export class SecurityController {
   constructor(
     private readonly securityService: SecurityService,
     private readonly jwtService: JwtService,
+    private readonly monitorBridgeService: SecurityMonitorBridgeService,
   ) {}
+
+  @Public()
+  @UseGuards(MonitorBridgeGuard)
+  @Throttle({ default: { limit: 300, ttl: 60000 } })
+  @Get('access-logs')
+  getMonitorAccessLogs(@Query() query: QueryAccessLogsDto) {
+    return this.monitorBridgeService.getAccessLogs(query);
+  }
+
+  @Public()
+  @UseGuards(MonitorBridgeGuard)
+  @Throttle({ default: { limit: 300, ttl: 60000 } })
+  @Get('ip-summary')
+  getMonitorIpSummary(@Query() query: QueryBridgeSummaryDto) {
+    return this.monitorBridgeService.getIpSummary(query);
+  }
+
+  @Public()
+  @UseGuards(MonitorBridgeGuard)
+  @Throttle({ default: { limit: 300, ttl: 60000 } })
+  @Get('country-summary')
+  getMonitorCountrySummary(@Query() query: QueryBridgeSummaryDto) {
+    return this.monitorBridgeService.getCountrySummary(query);
+  }
 
   @Public()
   @Throttle({ default: { limit: 25, ttl: 60000 } })

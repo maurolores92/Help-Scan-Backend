@@ -136,3 +136,40 @@ export class ReportClientErrorDto {
   @MaxLength(8000)
   stackTrace?: string;
 }
+
+export class QueryAccessLogsDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  page?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(200)
+  pageSize?: number;
+
+  @IsOptional()
+  @IsString()
+  onlyPublic?: string;
+
+  @IsOptional()
+  @IsString()
+  statusGroup?: string;
+
+  @IsOptional()
+  @IsString()
+  countryCode?: string;
+
+  @IsOptional()
+  @IsString()
+  search?: string;
+}
+
+export class QueryBridgeSummaryDto {
+  @IsOptional()
+  @IsString()
+  onlyPublic?: string;
+}

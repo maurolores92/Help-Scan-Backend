@@ -19,12 +19,18 @@ export interface ResolvedGeoIpInfo {
   lookupProvider: string;
 }
 
-const CACHE_TTL_MS = 15 * 24 * 60 * 60 * 1000; // 15 días
+const CACHE_TTL_MS = 15 * 24 * 60 * 60 * 1000; // 15 días en DB
+const MEMORY_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hora en memoria
+const MEMORY_CACHE_MAX_ENTRIES = 2000;
 
 @Injectable()
 export class GeoIpService {
   private readonly logger = new Logger(GeoIpService.name);
   private readonly inFlightLookups = new Map<string, Promise<ResolvedGeoIpInfo>>();
+  private readonly memoryCache = new Map<
+    string,
+    { data: ResolvedGeoIpInfo; expiresAt: number }
+  >();
   private readonly countryDisplayNames: Intl.DisplayNames | null = (() => {
     try {
       return new Intl.DisplayNames(['es'], { type: 'region' });
@@ -153,8 +159,19 @@ export class GeoIpService {
     return this.lookupOfflineGeoipLite(ip);
   }
 
+  private setMemoryCache(ip: string, info: ResolvedGeoIpInfo): void {
+    if (this.memoryCache.size >= MEMORY_CACHE_MAX_ENTRIES) {
+      const oldestKey = this.memoryCache.keys().next().value;
+      if (oldestKey) this.memoryCache.delete(oldestKey);
+    }
+    this.memoryCache.set(ip, {
+      data: info,
+      expiresAt: Date.now() + MEMORY_CACHE_TTL_MS,
+    });
+  }
+
   /**
-   * Obtiene información de IP desde caché en PostgreSQL o la enriquece sin duplicar consultas concurrentes.
+   * Obtiene información de IP desde caché en memoria / PostgreSQL o la enriquece sin duplicar consultas concurrentes.
    */
   async getOrLookupIp(
     rawIp: string,
@@ -162,7 +179,16 @@ export class GeoIpService {
   ): Promise<ResolvedGeoIpInfo> {
     const ip = normalizeIpAddress(rawIp);
 
+    if (isPrivateOrLocalIp(ip)) {
+      return this.resolveExternalOrOffline(ip);
+    }
+
     if (!options.forceRefresh) {
+      const memHit = this.memoryCache.get(ip);
+      if (memHit && memHit.expiresAt > Date.now()) {
+        return memHit.data;
+      }
+
       const cached = await this.ipModel.findOne({ where: { ipAddress: ip } });
       const cacheValid =
         cached &&
@@ -172,7 +198,7 @@ export class GeoIpService {
         (cached.lookupProvider === 'ipinfo' || cached.lookupProvider === 'local');
 
       if (cacheValid && cached) {
-        return {
+        const result: ResolvedGeoIpInfo = {
           ipAddress: ip,
           countryCode: cached.countryCode,
           countryName: cached.countryName,
@@ -183,6 +209,8 @@ export class GeoIpService {
           asn: cached.asn,
           lookupProvider: cached.lookupProvider || 'cache',
         };
+        this.setMemoryCache(ip, result);
+        return result;
       }
     }
 
@@ -231,6 +259,7 @@ export class GeoIpService {
         this.logger.warn(`No se pudo persistir caché GeoIP para ${ip}: ${err?.message}`);
       }
 
+      this.setMemoryCache(ip, resolved);
       return resolved;
     })().finally(() => {
       this.inFlightLookups.delete(ip);

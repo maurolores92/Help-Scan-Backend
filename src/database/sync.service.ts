@@ -47,6 +47,7 @@ export class SyncService implements OnModuleInit {
       'SecurityIpIntelligence',
       'SecurityLoginEvent',
       'SecurityErrorLog',
+      'SecurityAccessLog',
     ];
 
     if (isForceSync) {
@@ -321,6 +322,11 @@ export class SyncService implements OnModuleInit {
       { table: 'security_error_logs', name: 'idx_security_err_source', column: 'source' },
       { table: 'security_error_logs', name: 'idx_security_err_ip', column: 'ip_address' },
       { table: 'security_error_logs', name: 'idx_security_err_created_at', column: 'created_at' },
+      { table: 'security_access_logs', name: 'idx_security_access_created_at', column: 'created_at' },
+      { table: 'security_access_logs', name: 'idx_security_access_ip', column: 'ip_address' },
+      { table: 'security_access_logs', name: 'idx_security_access_status_code', column: 'status_code' },
+      { table: 'security_access_logs', name: 'idx_security_access_country_code', column: 'country_code' },
+      { table: 'security_access_logs', name: 'idx_security_access_event_type', column: 'event_type' },
     ];
 
     for (const idx of singleColumnIndexes) {

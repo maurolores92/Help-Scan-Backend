@@ -87,9 +87,15 @@ export class AllExceptionsFilter implements ExceptionFilter {
     );
 
     const requestUrl = request.originalUrl || request.url || '';
+    const isMonitorBridgeRequest = Boolean(request.headers?.['x-monitor-key']);
+    const isSecurityEndpoint =
+      requestUrl.startsWith('/api/security') || requestUrl.startsWith('/security');
+
     if (
       status >= 400 &&
       AllExceptionsFilter.errorRecorder &&
+      !isMonitorBridgeRequest &&
+      !isSecurityEndpoint &&
       !requestUrl.includes('/security/client-errors')
     ) {
       try {

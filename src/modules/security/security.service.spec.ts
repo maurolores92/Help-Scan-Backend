@@ -358,7 +358,11 @@ describe('Security Module (GeoIP, Bloqueo IP, Retención 60d, Errores y RBAC Sup
         verify: jest.fn().mockReturnValue({ id: 5, username: 'operador', companyId: 2 }),
       };
 
-      const controller = new SecurityController(securityServiceMock, jwtServiceMock);
+      const controller = new SecurityController(
+        securityServiceMock,
+        jwtServiceMock,
+        {} as any,
+      );
 
       expect(() =>
         controller.getOverview('7', { id: 5, role: { slug: 'company_admin' } }),

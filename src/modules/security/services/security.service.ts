@@ -39,6 +39,7 @@ import { AuditAction } from '../../audit/audit.model';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { NotificationsGateway } from '../../notifications/notifications.gateway';
 import { AllExceptionsFilter } from '../../../common/filters/all-exceptions.filter';
+import { SecurityMonitorBridgeService } from './security-monitor-bridge.service';
 
 interface BufferedTrafficHit {
   ipAddress: string;
@@ -74,6 +75,7 @@ export class SecurityService implements OnModuleInit, OnModuleDestroy {
     private readonly auditService: AuditService,
     private readonly notificationsService: NotificationsService,
     @Optional() private readonly notificationsGateway?: NotificationsGateway,
+    @Optional() private readonly monitorBridge?: SecurityMonitorBridgeService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -92,6 +94,7 @@ export class SecurityService implements OnModuleInit, OnModuleDestroy {
         companyId: err.companyId,
         ipAddress: err.ipAddress,
         userAgent: err.userAgent,
+        fromFilter: true,
       });
     });
 
@@ -336,6 +339,29 @@ export class SecurityService implements OnModuleInit, OnModuleDestroy {
       if (params.eventType === SecurityLoginEventType.LOGIN_FAILED) {
         await this.checkBruteForceThreshold(ip, geo.countryName, geo.isp);
       }
+
+      const loginStatusCode =
+        params.eventType === SecurityLoginEventType.LOGIN_FAILED ||
+        params.eventType === SecurityLoginEventType.SESSION_REVOKED
+          ? 401
+          : params.eventType === SecurityLoginEventType.LOGIN_BLOCKED_ACTIVE_SESSION
+            ? 409
+            : 200;
+
+      void this.monitorBridge?.recordAccessLog({
+        source: 'AUTH',
+        eventType: params.eventType,
+        ipAddress: ip,
+        userAgent: params.userAgent,
+        method: 'POST',
+        path:
+          params.eventType === SecurityLoginEventType.LOGOUT
+            ? '/api/auth/logout'
+            : '/api/auth/login',
+        statusCode: loginStatusCode,
+        usernameAttempted: params.usernameAttempted || null,
+        message: params.failureReason || params.eventType,
+      });
     } catch (err: any) {
       this.logger.warn(`Error registrando evento de login: ${err?.message}`);
     }
@@ -393,6 +419,7 @@ export class SecurityService implements OnModuleInit, OnModuleDestroy {
     companyId?: number | null;
     ipAddress?: string | null;
     userAgent?: string | null;
+    fromFilter?: boolean;
   }): Promise<void> {
     try {
       const statusCode = Number(params.statusCode || 0);
@@ -486,6 +513,35 @@ export class SecurityService implements OnModuleInit, OnModuleDestroy {
         username: params.username || null,
         createdAt: (created as any).createdAt || new Date().toISOString(),
       });
+
+      const isDuplicateAuthLoginError =
+        Boolean(params.fromFilter) &&
+        String(params.path || '').includes('/auth/login') &&
+        (statusCode === 401 || statusCode === 409);
+
+      if (!isDuplicateAuthLoginError) {
+        const accessEventType =
+          params.source === SecurityErrorSource.FRONTEND
+            ? 'FRONTEND_ERROR'
+            : statusCode === 401 || statusCode === 403
+              ? 'API_REJECTED'
+              : statusCode >= 500 || statusCode === 0
+                ? 'HTTP_5XX'
+                : 'HTTP_4XX';
+
+        void this.monitorBridge?.recordAccessLog({
+          source: params.source,
+          eventType: accessEventType,
+          ipAddress: ip,
+          userAgent: params.userAgent,
+          method: params.method || null,
+          path: params.path,
+          statusCode,
+          usernameAttempted: params.username || null,
+          message: params.message,
+          stackTrace: params.stackTrace || null,
+        });
+      }
     } catch (err: any) {
       this.logger.warn(`Error registrando log de error de seguridad: ${err?.message}`);
     }
@@ -814,7 +870,7 @@ export class SecurityService implements OnModuleInit, OnModuleDestroy {
     const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
     const ipCutoff = new Date(Date.now() - Math.max(retentionDays, 90) * 24 * 60 * 60 * 1000);
 
-    const [deletedLogins, deletedErrors, deletedIps] = await Promise.all([
+    const [deletedLogins, deletedErrors, deletedIps, deletedAccessLogs] = await Promise.all([
       this.loginEventModel.destroy({ where: { createdAt: { [Op.lt]: cutoff } } }),
       this.errorLogModel.destroy({ where: { createdAt: { [Op.lt]: cutoff } } }),
       this.ipModel.destroy({
@@ -823,11 +879,12 @@ export class SecurityService implements OnModuleInit, OnModuleDestroy {
           lastSeenAt: { [Op.lt]: ipCutoff },
         },
       }),
+      this.monitorBridge?.purgeExpired(retentionDays) ?? Promise.resolve(0),
     ]);
 
-    if (deletedLogins > 0 || deletedErrors > 0 || deletedIps > 0) {
+    if (deletedLogins > 0 || deletedErrors > 0 || deletedIps > 0 || deletedAccessLogs > 0) {
       this.logger.log(
-        `[SecurityRetention ${retentionDays}d] Purgados ${deletedLogins} logins, ${deletedErrors} errores, ${deletedIps} IPs inactivas.`,
+        `[SecurityRetention ${retentionDays}d] Purgados ${deletedLogins} logins, ${deletedErrors} errores, ${deletedAccessLogs} access-logs, ${deletedIps} IPs inactivas.`,
       );
     }
 
