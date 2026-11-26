@@ -3,7 +3,7 @@ import { getModelToken } from '@nestjs/sequelize';
 import { BadRequestException } from '@nestjs/common';
 import * as os from 'os';
 import * as path from 'path';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { TenantInboxWatcherService } from './tenant-inbox-watcher.service';
 import { Company } from '../../companies/company.model';
 import { Document } from '../document.model';
@@ -27,6 +27,8 @@ describe('TenantInboxWatcherService & Multitenant Storage Isolation', () => {
   let documentModelMock: any;
   let tenantQuotasMock: any;
   let processingQueueMock: any;
+  let ftpDeviceModelMock: any;
+  let notificationsServiceMock: any;
   let tempStorageDir: string;
 
   beforeEach(async () => {
@@ -49,6 +51,18 @@ describe('TenantInboxWatcherService & Multitenant Storage Isolation', () => {
 
     processingQueueMock = {
       enqueue: jest.fn(),
+      emitCompanyQueueSnapshot: jest.fn().mockResolvedValue(undefined),
+    };
+
+    ftpDeviceModelMock = {
+      findOne: jest.fn().mockResolvedValue(null),
+      increment: jest.fn().mockResolvedValue(undefined),
+      update: jest.fn().mockResolvedValue(undefined),
+    };
+
+    notificationsServiceMock = {
+      dispatch: jest.fn().mockResolvedValue(undefined),
+      emitCompanyEvent: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -58,11 +72,7 @@ describe('TenantInboxWatcherService & Multitenant Storage Isolation', () => {
         { provide: getModelToken(Document), useValue: documentModelMock },
         {
           provide: getModelToken(FtpDevice),
-          useValue: {
-            findOne: jest.fn().mockResolvedValue(null),
-            increment: jest.fn().mockResolvedValue(undefined),
-            update: jest.fn().mockResolvedValue(undefined),
-          },
+          useValue: ftpDeviceModelMock,
         },
         { provide: TenantQuotasService, useValue: tenantQuotasMock },
         { provide: DocumentProcessingQueueService, useValue: processingQueueMock },
@@ -76,7 +86,7 @@ describe('TenantInboxWatcherService & Multitenant Storage Isolation', () => {
         { provide: AuditService, useValue: { log: jest.fn().mockResolvedValue(undefined) } },
         {
           provide: NotificationsService,
-          useValue: { dispatch: jest.fn().mockResolvedValue(undefined) },
+          useValue: notificationsServiceMock,
         },
       ],
     }).compile();
@@ -163,6 +173,64 @@ describe('TenantInboxWatcherService & Multitenant Storage Isolation', () => {
 
     expect(isEncryptedVaultBuffer(encryptedDiskBytes)).toBe(true);
     expect(decryptVaultBuffer(encryptedDiskBytes, 6).equals(rawPdf)).toBe(true);
+  });
+
+  it('detecta automáticamente PDFs en carpetas company_<id>_<slug>/inbox/<subFolder> durante el barrido y emite eventos WebSocket', async () => {
+    const { inboxDir } = ensureTenantDirectories(9, 'Impresora Norte');
+    const hpSubDir = path.join(inboxDir, 'hp-e52645-norte');
+    mkdirSync(hpSubDir, { recursive: true });
+    const settledPdfPath = path.join(hpSubDir, 'escaneo_auto.pdf');
+    writeFileSync(settledPdfPath, Buffer.from('%PDF-1.5 Escaneo automatico sin pulsar boton'));
+
+    const oldTime = new Date(Date.now() - 5000);
+    utimesSync(settledPdfPath, oldTime, oldTime);
+
+    ftpDeviceModelMock.findOne.mockResolvedValueOnce({
+      id: 77,
+      deviceName: 'HP E52645 Norte',
+    });
+
+    const importedCount = await service.runFallbackInboxSweep();
+
+    expect(importedCount).toBe(1);
+    expect(existsSync(settledPdfPath)).toBe(false);
+    expect(ftpDeviceModelMock.findOne).toHaveBeenCalledWith({
+      where: { companyId: 9, subFolder: 'hp-e52645-norte' },
+      attributes: ['id', 'deviceName'],
+    });
+    expect(processingQueueMock.emitCompanyQueueSnapshot).toHaveBeenCalledWith(9);
+    expect(notificationsServiceMock.emitCompanyEvent).toHaveBeenCalledWith(
+      9,
+      'documents:ftp-uploaded',
+      expect.objectContaining({
+        companyId: 9,
+        documentId: 501,
+        originalName: 'escaneo_auto.pdf',
+        ftpDeviceId: 77,
+        ftpDeviceName: 'HP E52645 Norte',
+      }),
+    );
+    expect(notificationsServiceMock.emitCompanyEvent).toHaveBeenCalledWith(
+      9,
+      'documents:updated',
+      expect.objectContaining({
+        companyId: 9,
+        documentId: 501,
+        action: 'ftp-uploaded',
+      }),
+    );
+  });
+
+  it('omite durante el barrido archivos recién creados (<1.8s) para no ingerir transferencias FTP incompletas', async () => {
+    const { inboxDir } = ensureTenantDirectories(12, 'Taller');
+    const freshPdfPath = path.join(inboxDir, 'en_progreso.pdf');
+    writeFileSync(freshPdfPath, Buffer.from('%PDF-1.4 escribiendo'));
+
+    const importedCount = await service.runFallbackInboxSweep();
+
+    expect(importedCount).toBe(0);
+    expect(existsSync(freshPdfPath)).toBe(true);
+    expect(documentModelMock.create).not.toHaveBeenCalled();
   });
 });
 

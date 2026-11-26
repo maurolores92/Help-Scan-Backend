@@ -45,9 +45,13 @@ export interface FtpDeviceIngestContext {
   deviceName: string;
 }
 
+const DEFAULT_INBOX_POLL_INTERVAL_MS = 5000;
+const MIN_INBOX_FILE_SETTLE_MS = 1800;
+
 /**
- * Servicio Watcher en tiempo real (`chokidar`) que observa `storage/tenancy/company_<id>/inbox`
- * (incluyendo subcarpetas por equipo HP) para detectar PDFs enviados por impresoras HP vía SFTP/FTPS/FTP.
+ * Servicio Watcher en tiempo real (`chokidar`) + barrido liviano sobre `inbox/`
+ * que observa `storage/tenancy/company_<id>[_<slug>]/inbox`
+ * (incluyendo subcarpetas por equipo HP) para detectar PDFs enviados vía SFTP/FTPS/FTP.
  */
 @Injectable()
 export class TenantInboxWatcherService
@@ -55,6 +59,8 @@ export class TenantInboxWatcherService
 {
   private readonly logger = new Logger(TenantInboxWatcherService.name);
   private watcher: chokidar.FSWatcher | null = null;
+  private pollIntervalHandle: ReturnType<typeof setInterval> | null = null;
+  private isPollingSweepRunning = false;
   private readonly watchedCompanyIds = new Set<number>();
   private readonly processingPaths = new Set<string>();
 
@@ -94,7 +100,7 @@ export class TenantInboxWatcherService
           stabilityThreshold: 2500,
           pollInterval: 300,
         },
-        ignored: /(^|[\/\\])\..|[\/\\](vault|quarantine)([\/\\]|$)|(\.part|\.tmp|\.crdownload|desktop\.ini)$/i,
+        ignored: /(^|[\/\\])\..|[\/\\](vault|quarantine|images|whatsapp_sessions?)([\/\\]|$)|(\.part|\.tmp|\.crdownload|desktop\.ini)$/i,
       });
 
       this.watcher.on('add', (filePath: string) => {
@@ -102,6 +108,8 @@ export class TenantInboxWatcherService
           this.logger.error(`Error procesando archivo detectado '${filePath}': ${err?.message}`);
         });
       });
+
+      this.startFallbackInboxPolling();
 
       this.logger.log(
         `👁️ Watcher SFTP/Local activo sobre storage/tenancy (${companies.length} compañía(s) aprovisionadas)`,
@@ -112,10 +120,86 @@ export class TenantInboxWatcherService
   }
 
   async onModuleDestroy(): Promise<void> {
+    if (this.pollIntervalHandle) {
+      clearInterval(this.pollIntervalHandle);
+      this.pollIntervalHandle = null;
+    }
     if (this.watcher) {
       await this.watcher.close();
       this.watcher = null;
     }
+  }
+
+  private startFallbackInboxPolling(): void {
+    const rawInterval = Number(process.env.FTP_INBOX_POLL_INTERVAL_MS);
+    const intervalMs = Number.isFinite(rawInterval)
+      ? rawInterval
+      : DEFAULT_INBOX_POLL_INTERVAL_MS;
+
+    if (intervalMs <= 0) return;
+
+    this.pollIntervalHandle = setInterval(() => {
+      void this.runFallbackInboxSweep();
+    }, intervalMs);
+    this.pollIntervalHandle.unref?.();
+  }
+
+  /**
+   * Barrido ligero exclusivo sobre carpetas `inbox/` de cada tenant.
+   * Complementa a `chokidar` y al webhook SFTPGo cuando el volumen montado
+   * no propaga eventos inotify entre contenedores o sistemas de archivos en red.
+   */
+  async runFallbackInboxSweep(): Promise<number> {
+    if (this.isPollingSweepRunning) return 0;
+    this.isPollingSweepRunning = true;
+
+    let detectedCount = 0;
+    try {
+      const tenancyRoot = join(getStorageRootPath(), 'tenancy');
+      if (!existsSync(tenancyRoot)) return 0;
+
+      const companyDirs = readdirSync(tenancyRoot, { withFileTypes: true }).filter(
+        (entry) => entry.isDirectory() && /^company_(\d+)(?:_.+)?$/.test(entry.name),
+      );
+
+      for (const dirEntry of companyDirs) {
+        const match = dirEntry.name.match(/^company_(\d+)(?:_.+)?$/);
+        if (!match) continue;
+        const companyId = Number(match[1]);
+        const inboxDir = join(tenancyRoot, dirEntry.name, 'inbox');
+        if (!existsSync(inboxDir)) continue;
+
+        const files = this.collectInboxFiles(inboxDir);
+        for (const fullPath of files) {
+          if (this.processingPaths.has(fullPath) || !existsSync(fullPath)) continue;
+
+          try {
+            const stats = statSync(fullPath);
+            if (Date.now() - stats.mtimeMs < MIN_INBOX_FILE_SETTLE_MS) {
+              continue;
+            }
+          } catch {
+            continue;
+          }
+
+          const outcome = await this.ingestSingleInboxFile(
+            companyId,
+            fullPath,
+            undefined,
+            true,
+          );
+          if (outcome.status === 'imported') {
+            detectedCount++;
+          }
+        }
+      }
+    } catch (err: any) {
+      this.logger.warn(`Error en barrido periódico de inbox SFTP: ${err?.message}`);
+    } finally {
+      this.isPollingSweepRunning = false;
+    }
+
+    return detectedCount;
   }
 
   /**
@@ -207,7 +291,7 @@ export class TenantInboxWatcherService
     filePath: string,
   ): { companyId: number; subFolder: string | null } | null {
     const normalized = filePath.replace(/\\/g, '/');
-    const match = normalized.match(/\/tenancy\/company_(\d+)\/inbox\/(.+)$/);
+    const match = normalized.match(/\/tenancy\/company_(\d+)(?:_[^/]+)?\/inbox\/(.+)$/);
     if (!match) return null;
 
     const companyId = Number(match[1]);
@@ -392,6 +476,8 @@ export class TenantInboxWatcherService
           });
 
           this.processingQueue.enqueue(doc.id, actorUserId ?? null);
+          void this.processingQueue.emitCompanyQueueSnapshot?.(companyId);
+          this.emitFtpUploadedEvents(companyId, doc, deviceCtx);
 
           return { status: 'imported' as const, document: doc };
         },
@@ -399,6 +485,35 @@ export class TenantInboxWatcherService
     } finally {
       this.processingPaths.delete(fullPath);
     }
+  }
+
+  private emitFtpUploadedEvents(
+    companyId: number,
+    doc: Document,
+    deviceCtx: FtpDeviceIngestContext | null,
+  ): void {
+    const uploadedPayload = {
+      companyId,
+      documentId: doc.id,
+      originalName: doc.originalName,
+      source: doc.source,
+      status: doc.status,
+      ftpDeviceId: deviceCtx?.id ?? null,
+      ftpDeviceName: deviceCtx?.deviceName ?? null,
+      createdAt: doc.createdAt ?? new Date().toISOString(),
+    };
+    this.notificationsService.emitCompanyEvent?.(
+      companyId,
+      'documents:ftp-uploaded',
+      uploadedPayload,
+    );
+    this.notificationsService.emitCompanyEvent?.(companyId, 'documents:updated', {
+      companyId,
+      documentId: doc.id,
+      status: doc.status,
+      source: doc.source,
+      action: 'ftp-uploaded',
+    });
   }
 
   private async notifyRejectedFile(

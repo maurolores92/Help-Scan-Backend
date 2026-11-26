@@ -156,6 +156,26 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
     }
   }
 
+  private emitCompanyDocumentUpdate(
+    doc: Document,
+    status: DocumentStatus,
+    action: 'processing' | 'processed' | 'error',
+  ): void {
+    void this.emitCompanyQueueSnapshot(doc.companyId);
+    if (!doc.companyId || doc.companyId <= 0 || process.env.NODE_ENV === 'test') return;
+    (this.notificationsService as any).emitCompanyEvent?.(
+      doc.companyId,
+      'documents:updated',
+      {
+        companyId: doc.companyId,
+        documentId: doc.id,
+        status,
+        source: doc.source,
+        action,
+      },
+    );
+  }
+
   private drainQueue(): void {
     while (this.activeWorkers < MAX_CONCURRENT_EXTRACTIONS && this.queue.length > 0) {
       const job = this.queue.shift()!;
@@ -188,7 +208,7 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
       status: DocumentStatus.PROCESSING,
       errorMessage: null,
     });
-    void this.emitCompanyQueueSnapshot(doc.companyId);
+    this.emitCompanyDocumentUpdate(doc, DocumentStatus.PROCESSING, 'processing');
 
     try {
       const fullPath = resolveSafeStorageFilePath(
@@ -382,7 +402,7 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
           link: '/documents',
         },
       });
-      void this.emitCompanyQueueSnapshot(doc.companyId);
+      this.emitCompanyDocumentUpdate(doc, nextStatus, 'processed');
 
       for (const hook of this.postProcessHooks) {
         try {
@@ -403,7 +423,7 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
         status: DocumentStatus.ERROR,
         errorMessage: errMsg,
       });
-      void this.emitCompanyQueueSnapshot(doc.companyId);
+      this.emitCompanyDocumentUpdate(doc, DocumentStatus.ERROR, 'error');
 
       await this.notificationsService.dispatch({
         type: 'document.error',
