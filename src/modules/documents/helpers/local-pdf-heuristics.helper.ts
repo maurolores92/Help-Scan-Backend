@@ -5,6 +5,7 @@ export interface DocumentArticleItem {
   precioSinIva?: number | null;
   precioFinal?: number | null;
   ivaPorcentaje?: number | null;
+  bonificacion?: number | string | null;
 }
 
 export interface UniversalDocumentExtractionResult {

@@ -5,7 +5,10 @@ import { Document, DocumentPaymentStatus, DocumentStatus } from '../document.mod
 import { DocumentAiExtractorService } from './document-ai-extractor.service';
 import { DocumentFiscalChecksService } from './document-fiscal-checks.service';
 import { DocumentFormsService } from './document-forms.service';
-import { resolveDefaultPaymentStatus } from '../helpers/document-fiscal-checks.helper';
+import {
+  extractDiscountInputFromMetadata,
+  resolveDefaultPaymentStatus,
+} from '../helpers/document-fiscal-checks.helper';
 import { ClientsService } from '../../clients/clients.service';
 import { TenantQuotasService } from '../../plans/services/tenant-quotas.service';
 import { NotificationsService } from '../../notifications/notifications.service';
@@ -205,6 +208,7 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
           ? DocumentStatus.VALIDATED
           : DocumentStatus.PENDING_APPROVAL;
 
+      const discountMeta = extractDiscountInputFromMetadata(extraction.extractedData);
       const fiscalEval = await this.fiscalChecksService.evaluateDocument(
         doc.companyId,
         {
@@ -219,6 +223,7 @@ export class DocumentProcessingQueueService implements OnApplicationBootstrap {
           taxAmount: extraction.taxAmount,
           exemptAmount: extraction.exemptAmount,
           otherTaxesAmount: extraction.otherTaxesAmount,
+          ...discountMeta,
           totalAmount: extraction.totalAmount,
         },
         doc.id,

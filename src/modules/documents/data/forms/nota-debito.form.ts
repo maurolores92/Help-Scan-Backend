@@ -11,7 +11,7 @@ export const NOTA_DEBITO_FORM_SEED: DefaultDocumentFormSeed = {
     'Comprobante fiscal ARCA para intereses por mora, gastos bancarios, cheques rechazados o cargos adicionales a favor del emisor.',
   icon: 'tabler:file-plus',
   displayOrder: 3,
-  version: 1,
+  version: 2,
   matchAliases: [
     'nota_debito',
     'nota_de_debito',

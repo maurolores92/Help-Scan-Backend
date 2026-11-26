@@ -36,6 +36,7 @@ import {
   prepareTenantPdfStorageTarget,
 } from './helpers/document-storage.helper';
 import { buildDocumentSearchWhere } from './helpers/document-search.helper';
+import { extractDiscountInputFromMetadata } from './helpers/document-fiscal-checks.helper';
 import { DocumentFiscalChecksService } from './services/document-fiscal-checks.service';
 import { DocumentLinksService } from './services/document-links.service';
 import { DocumentProcessingQueueService } from './services/document-processing-queue.service';
@@ -477,6 +478,11 @@ export class DocumentsService {
       };
     }
 
+    const discountMeta = extractDiscountInputFromMetadata(
+      updatePayload.extractedData ?? doc.extractedData,
+      dto.formData ?? doc.formRecord?.formData,
+    );
+
     const fiscalEval = await this.fiscalChecksService.evaluateDocument(
       doc.companyId,
       {
@@ -491,6 +497,7 @@ export class DocumentsService {
         taxAmount: updatePayload.taxAmount ?? doc.taxAmount,
         exemptAmount: updatePayload.exemptAmount ?? doc.exemptAmount,
         otherTaxesAmount: updatePayload.otherTaxesAmount ?? doc.otherTaxesAmount,
+        ...discountMeta,
         totalAmount: updatePayload.totalAmount ?? doc.totalAmount,
       },
       doc.id,

@@ -12,7 +12,69 @@ export interface FiscalCheckInput {
   taxAmount?: number | string | null;
   exemptAmount?: number | string | null;
   otherTaxesAmount?: number | string | null;
+  discountAmount?: number | string | null;
+  discountPercent?: number | string | null;
+  grossSubtotal?: number | string | null;
   totalAmount?: number | string | null;
+}
+
+/**
+ * Extrae valores opcionales de descuento/bonificación desde `extractedData` y `formData`
+ * sin alterar documentos existentes que no posean estos campos.
+ */
+export function extractDiscountInputFromMetadata(
+  extractedData?: Record<string, any> | null,
+  formData?: Record<string, any> | null,
+): {
+  discountAmount: number | null;
+  discountPercent: number | null;
+  grossSubtotal: number | null;
+} {
+  const attrs = extractedData?.attributes && typeof extractedData.attributes === 'object'
+    ? extractedData.attributes
+    : {};
+  const amounts = extractedData?.amounts && typeof extractedData.amounts === 'object'
+    ? extractedData.amounts
+    : {};
+  const custom = formData && typeof formData === 'object' ? formData : {};
+
+  const parseLooseNumber = (val: unknown): number | null => {
+    if (val === null || val === undefined || val === '') return null;
+    if (typeof val === 'number') return Number.isFinite(val) ? val : null;
+    const cleaned = String(val).replace(/[%$\s]/g, '').replace(/,/g, '.').trim();
+    if (!cleaned) return null;
+    const num = Number(cleaned);
+    return Number.isFinite(num) ? num : null;
+  };
+
+  const discountAmount =
+    parseLooseNumber(custom.discountAmount) ??
+    parseLooseNumber(attrs.descuento) ??
+    parseLooseNumber(attrs.bonificacion) ??
+    parseLooseNumber(attrs.descuento_total) ??
+    parseLooseNumber(attrs.monto_descuento) ??
+    parseLooseNumber(amounts.descuento) ??
+    parseLooseNumber(amounts.bonificacion) ??
+    null;
+
+  const discountPercent =
+    parseLooseNumber(custom.discountPercent) ??
+    parseLooseNumber(attrs.descuento_porcentaje) ??
+    parseLooseNumber(attrs.bonificacion_porcentaje) ??
+    null;
+
+  const grossSubtotal =
+    parseLooseNumber(custom.grossSubtotal) ??
+    parseLooseNumber(attrs.subtotal_bruto) ??
+    null;
+
+  return {
+    discountAmount: discountAmount !== null ? Math.abs(discountAmount) : null,
+    discountPercent: discountPercent !== null && discountPercent > 0 && discountPercent < 100
+      ? discountPercent
+      : null,
+    grossSubtotal,
+  };
 }
 
 export interface DuplicateDocumentCandidate {
@@ -88,8 +150,9 @@ function toNullableNumber(val: number | string | null | undefined): number | nul
 }
 
 /**
- * Evalúa consistencia matemática entre neto, IVA, exento, otros tributos y total final.
- * Retorna una advertencia si hay una diferencia mayor a $1.00 (tolerancia de redondeo).
+ * Evalúa consistencia matemática entre neto, IVA, exento, otros tributos, descuentos y total final.
+ * Acepta tanto comprobantes donde el neto ya incluye bonificación como aquellos donde se resta
+ * un descuento global. Retorna una advertencia si la diferencia supera $1.00.
  */
 export function checkAmountConsistency(
   input: FiscalCheckInput,
@@ -101,6 +164,14 @@ export function checkAmountConsistency(
   const tax = toNullableNumber(input.taxAmount);
   const exempt = toNullableNumber(input.exemptAmount);
   const other = toNullableNumber(input.otherTaxesAmount);
+  const rawDiscount = toNullableNumber(input.discountAmount);
+  const discount = rawDiscount !== null ? Math.abs(rawDiscount) : 0;
+  const rawDiscountPct = toNullableNumber(input.discountPercent);
+  const discountPct =
+    rawDiscountPct !== null && rawDiscountPct > 0 && rawDiscountPct < 100
+      ? rawDiscountPct
+      : null;
+  const grossSubtotal = toNullableNumber(input.grossSubtotal);
 
   // Solo validar si existe al menos un subcomponente discriminado
   if (net === null && tax === null && exempt === null && other === null) {
@@ -108,25 +179,60 @@ export function checkAmountConsistency(
   }
 
   // Si solo vino netAmount sin IVA ni exento en un comprobante sin discriminar,
-  // evitar falso positivo cuando net === total (cubierto por diff <= 1) o cuando no vino taxAmount pero net < total (posible IVA implícito solo si tax != null o exempt/other != null).
+  // evitar falso positivo cuando net === total (cubierto por diff <= 1) o cuando no vino taxAmount pero net < total.
   if (tax === null && exempt === null && other === null && net !== null && net < total) {
     return null;
   }
 
-  const computedSum = Number(
+  const baseSum = Number(
     ((net || 0) + (tax || 0) + (exempt || 0) + (other || 0)).toFixed(2),
   );
-  const diff = Math.abs(computedSum - total);
-
-  if (diff > 1.0) {
-    return {
-      code: 'AMOUNT_MISMATCH',
-      severity: 'warning',
-      message: `Descuadre en totales: la suma de componentes (${computedSum.toLocaleString('es-AR', { minimumFractionDigits: 2 })}) difiere del total (${total.toLocaleString('es-AR', { minimumFractionDigits: 2 })}).`,
-    };
+  if (Math.abs(baseSum - total) <= 1.0) {
+    return null;
   }
 
-  return null;
+  // Contemplar descuento global ($):
+  // - Ya sea restado del total acumulado (neto/subtotal pre-descuento + IVA + otros - descuento = total)
+  // - O cuando vino subtotal bruto antes de descuento y se calcula (grossSubtotal - discount + tax + exempt + other = total)
+  if (discount > 0) {
+    const afterGlobalDiscount = Number((baseSum - discount).toFixed(2));
+    if (Math.abs(afterGlobalDiscount - total) <= 1.0) {
+      return null;
+    }
+    if (grossSubtotal !== null) {
+      const fromGross = Number(
+        (grossSubtotal - discount + (tax || 0) + (exempt || 0) + (other || 0)).toFixed(2),
+      );
+      if (Math.abs(fromGross - total) <= 1.0) {
+        return null;
+      }
+    }
+  }
+
+  // Contemplar porcentaje de descuento global si el descuento en $ no vino impreso aparte
+  if (discountPct !== null) {
+    const netAfterPct = (net || 0) * (1 - discountPct / 100);
+    const totalWithNetPct = Number(
+      (netAfterPct + (tax || 0) + (exempt || 0) + (other || 0)).toFixed(2),
+    );
+    const totalWithGlobalPct = Number((baseSum * (1 - discountPct / 100)).toFixed(2));
+    if (
+      Math.abs(totalWithNetPct - total) <= 1.0 ||
+      Math.abs(totalWithGlobalPct - total) <= 1.0
+    ) {
+      return null;
+    }
+  }
+
+  const effectiveComputed = discount > 0 ? Number((baseSum - discount).toFixed(2)) : baseSum;
+
+  return {
+    code: 'AMOUNT_MISMATCH',
+    severity: 'warning',
+    message: discount > 0
+      ? `Descuadre en totales: componentes menos descuento (${effectiveComputed.toLocaleString('es-AR', { minimumFractionDigits: 2 })}) difiere del total (${total.toLocaleString('es-AR', { minimumFractionDigits: 2 })}).`
+      : `Descuadre en totales: la suma de componentes (${baseSum.toLocaleString('es-AR', { minimumFractionDigits: 2 })}) difiere del total (${total.toLocaleString('es-AR', { minimumFractionDigits: 2 })}).`,
+  };
 }
 
 /**

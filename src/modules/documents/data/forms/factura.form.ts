@@ -11,7 +11,7 @@ export const FACTURA_FORM_SEED: DefaultDocumentFormSeed = {
     'Esquema fiscal unificado ARCA para Factura A/B/C/M/E y Factura de Crédito Electrónica (FCE MiPyME).',
   icon: 'tabler:file-invoice',
   displayOrder: 1,
-  version: 3,
+  version: 4,
   matchAliases: [
     'factura',
     'factura_a',

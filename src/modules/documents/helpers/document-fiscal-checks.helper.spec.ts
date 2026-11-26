@@ -1,6 +1,7 @@
 import {
   buildDocumentValidationWarnings,
   checkAmountConsistency,
+  extractDiscountInputFromMetadata,
   isValidArgentineCuit,
   normalizeFiscalNumberKey,
   resolveDefaultPaymentStatus,
@@ -54,6 +55,36 @@ describe('document-fiscal-checks.helper', () => {
       'AMOUNT_MISMATCH',
     ]);
     expect(warnings[0].relatedDocumentId).toBe(42);
+  });
+
+  it('no dispara AMOUNT_MISMATCH cuando la factura incluye descuento global o porcentual', () => {
+    // Neto/Subtotal pre-descuento + IVA - Descuento = Total final
+    expect(
+      checkAmountConsistency({
+        netAmount: 10000,
+        taxAmount: 2100,
+        discountAmount: 1000,
+        totalAmount: 11100,
+      }),
+    ).toBeNull();
+
+    // Descuento porcentual sobre neto
+    expect(
+      checkAmountConsistency({
+        netAmount: 10000,
+        taxAmount: 1890,
+        discountPercent: 10,
+        totalAmount: 10890,
+      }),
+    ).toBeNull();
+
+    // Extracción de descuentos desde attributes / formData
+    const metaDiscount = extractDiscountInputFromMetadata(
+      { attributes: { descuento: '1500.50', descuento_porcentaje: '10%' } },
+      { discountAmount: 1500.5 },
+    );
+    expect(metaDiscount.discountAmount).toBe(1500.5);
+    expect(metaDiscount.discountPercent).toBe(10);
   });
 
   it('asigna NOT_APPLICABLE por defecto a remitos, legajos, notas de crédito, retenciones, transferencias y presupuestos', () => {

@@ -33,7 +33,8 @@ INSTRUCCIONES CLAVE DE EXTRACCIÓN Y NORMALIZACIÓN:
      * "netAmount": subtotal o base imponible neta sin impuestos. Si dice "$ 154.200 + IVA" y no discrimina el monto de IVA, "totalAmount" es 154200 (o "netAmount": 154200).
      * "taxAmount": total de IVA u otros tributos.
      * "totalAmount": importe total final visible (ej: 154200).
-   - Ítems / Artículos: Extrae cada renglón de producto o servicio con { "code": string|null, "description": string, "quantity": number|null, "unitPrice": number|null, "subtotal": number|null }.
+     * Descuentos / Bonificaciones globales: si figuran explícitamente en el pie o resumen, devolver el monto positivo en "attributes.descuento" (y porcentaje en "attributes.descuento_porcentaje", subtotal previo en "attributes.subtotal_bruto"). En facturas AFIP/ARCA mantener en "netAmount" el Neto Gravado final imponible.
+   - Ítems / Artículos: Extrae cada renglón de producto o servicio con { "code": string|null, "description": string, "quantity": number|null, "unitPrice": number|null, "subtotal": number|null, "bonificacion": number|string|null }. Si un renglón tiene descuento/bonificación propia, incluirla en "bonificacion" y expresar "subtotal" ya neto de ese descuento.
    - Equipos y Servicios Técnicos: Si el comprobante menciona bienes, vehículos, equipos o activos en reparación/servicio, extrae en "attributes": "tipo_activo", "modelo", "numero_serie", "contador" (si aplica), "falla_reportada" y "trabajo_realizado".
    - Datos fiscales ARCA / Comprobantes específicos (devolver en "attributes" cuando aparezcan en el documento):
      * Factura/NC/ND ARCA: "codigo_arca" (ej: 001,002,003,006,008,011,201), "subtipo_fiscal" ("Factura" | "Nota de Crédito" | "Nota de Débito" | "Factura de Crédito Electrónica (FCE)"), "tipo_autorizacion" ("CAE"|"CAEA"|"CAI"), "concepto_arca" ("Productos"|"Servicios"|"Productos y Servicios"), "periodo_desde", "periodo_hasta", "condicion_iva_emisor", "ingresos_brutos_emisor", "inicio_actividades", "tipo_cambio", "iva_21", "iva_105", "iva_27", "percepcion_iibb", "comprobante_asociado", "motivo_credito", "motivo_debito".
@@ -540,6 +541,7 @@ export class DocumentAiExtractorService implements OnModuleInit {
           : it.iva_porcentaje !== null && it.iva_porcentaje !== undefined && !isNaN(Number(it.iva_porcentaje))
             ? Number(it.iva_porcentaje)
             : null,
+      bonificacion: it.bonificacion ?? it.descuento ?? null,
     }));
 
     const resolvedRecipientName = parsed.recipientName
@@ -844,6 +846,7 @@ export class DocumentAiExtractorService implements OnModuleInit {
           : it.iva_porcentaje !== null && it.iva_porcentaje !== undefined && !isNaN(Number(it.iva_porcentaje))
             ? Number(it.iva_porcentaje)
             : null,
+      bonificacion: it.bonificacion ?? it.descuento ?? null,
     }));
 
     return {

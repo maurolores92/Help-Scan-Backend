@@ -11,7 +11,7 @@ export const NOTA_CREDITO_FORM_SEED: DefaultDocumentFormSeed = {
     'Comprobante fiscal ARCA para anulaciones, devoluciones o bonificaciones que restan saldo sobre facturas emitidas o recibidas.',
   icon: 'tabler:file-minus',
   displayOrder: 2,
-  version: 1,
+  version: 2,
   matchAliases: [
     'nota_credito',
     'nota_de_credito',
