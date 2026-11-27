@@ -56,4 +56,12 @@ export class UpsertWhatsappChannelDto {
   @IsOptional()
   @IsBoolean()
   autoReplyConfirmation?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  notifyOnReceive?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  notifyOnIndexed?: boolean;
 }

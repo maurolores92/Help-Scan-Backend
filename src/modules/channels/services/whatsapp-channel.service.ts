@@ -37,6 +37,11 @@ import {
   resolveChannelOwnerContext,
   resolveInboxFilterUserId,
 } from '../helpers/channel-user-scope.helper';
+import {
+  buildWhatsappDuplicateNotification,
+  buildWhatsappIndexedNotification,
+  buildWhatsappReceivedNotification,
+} from '../helpers/channel-reply-formatter.helper';
 import { convertImageBufferToPdf } from '../helpers/email-pdf-synthesizer.helper';
 import { extractWhatsappAttachmentInfo } from '../helpers/whatsapp-message.helper';
 
@@ -74,6 +79,10 @@ export class WhatsappChannelService implements OnModuleInit {
       (channelId, companyId, userId, messages) =>
         this.handleIncomingBaileysMessages(channelId, companyId, userId, messages),
     );
+    this.processingQueue.registerPostProcessHook(async (doc) => {
+      if (doc.source !== DocumentSource.WHATSAPP) return;
+      await this.handleDocumentIndexedNotification(doc);
+    });
   }
 
   private assertTenantUser(user: {
@@ -113,6 +122,8 @@ export class WhatsappChannelService implements OnModuleInit {
         isActive: true,
         processImages: true,
         autoReplyConfirmation: false,
+        notifyOnReceive: false,
+        notifyOnIndexed: false,
         lastSyncStatus: WhatsappSyncStatus.IDLE,
       } as never,
     });
@@ -316,6 +327,14 @@ export class WhatsappChannelService implements OnModuleInit {
 
     const nextActive =
       dto.isActive !== undefined ? dto.isActive : channel.isActive;
+    const nextNotifyOnReceive =
+      dto.notifyOnReceive !== undefined
+        ? dto.notifyOnReceive
+        : Boolean(channel.notifyOnReceive);
+    const nextNotifyOnIndexed =
+      dto.notifyOnIndexed !== undefined
+        ? dto.notifyOnIndexed
+        : Boolean(channel.notifyOnIndexed);
 
     await channel.update({
       senderPolicy: dto.senderPolicy ?? channel.senderPolicy,
@@ -328,10 +347,12 @@ export class WhatsappChannelService implements OnModuleInit {
         dto.processImages !== undefined
           ? dto.processImages
           : channel.processImages,
+      notifyOnReceive: nextNotifyOnReceive,
+      notifyOnIndexed: nextNotifyOnIndexed,
       autoReplyConfirmation:
         dto.autoReplyConfirmation !== undefined
           ? dto.autoReplyConfirmation
-          : channel.autoReplyConfirmation,
+          : nextNotifyOnReceive || nextNotifyOnIndexed,
     });
 
     if (!nextActive) {
@@ -350,6 +371,8 @@ export class WhatsappChannelService implements OnModuleInit {
         ignoreGroups: channel.ignoreGroups,
         isActive: channel.isActive,
         processImages: channel.processImages,
+        notifyOnReceive: channel.notifyOnReceive,
+        notifyOnIndexed: channel.notifyOnIndexed,
         autoReplyConfirmation: channel.autoReplyConfirmation,
       },
       description: `Actualizó reglas de recepción de WhatsApp (usuario #${owner.userId})`,
@@ -665,6 +688,13 @@ export class WhatsappChannelService implements OnModuleInit {
           'whatsapp:message_received',
           wsPayload,
         );
+
+        if (channel.notifyOnReceive) {
+          const receiveText = isDuplicate
+            ? buildWhatsappDuplicateNotification()
+            : buildWhatsappReceivedNotification();
+          await this.sendShortWhatsappNotice(channel.id, remoteJid, receiveText);
+        }
       } catch (err: any) {
         const errMsg =
           err?.message || 'Error al descargar o procesar archivo de WhatsApp';
@@ -699,6 +729,58 @@ export class WhatsappChannelService implements OnModuleInit {
           errPayload,
         );
       }
+    }
+  }
+
+  private async sendShortWhatsappNotice(
+    channelId: number,
+    targetJid: string,
+    text: string,
+  ): Promise<void> {
+    if (!targetJid || !this.baileysService.sendTextMessage) return;
+    try {
+      await this.baileysService.sendTextMessage(channelId, targetJid, text);
+    } catch (err: any) {
+      this.logger.warn(
+        `[WhatsApp ch_${channelId}] No se pudo enviar notificación a '${targetJid}': ${err?.message}`,
+      );
+    }
+  }
+
+  private async handleDocumentIndexedNotification(doc: Document): Promise<void> {
+    try {
+      const msg = await this.whatsappMessageModel.findOne({
+        where: { companyId: doc.companyId, documentId: doc.id },
+        order: [['id', 'DESC']],
+      });
+      if (!msg) return;
+
+      const targetJid = msg.replyJid || msg.groupJid || msg.senderPhone;
+      if (!targetJid) return;
+
+      const channel = msg.channelId
+        ? await this.whatsappChannelModel.findOne({
+            where: { id: msg.channelId, isActive: true },
+          })
+        : await this.whatsappChannelModel.findOne({
+            where: {
+              companyId: doc.companyId,
+              ...(msg.userId ? { userId: msg.userId } : {}),
+              isActive: true,
+            },
+          });
+
+      if (!channel || !channel.notifyOnIndexed) return;
+
+      await this.sendShortWhatsappNotice(
+        channel.id,
+        targetJid,
+        buildWhatsappIndexedNotification(),
+      );
+    } catch (err: any) {
+      this.logger.warn(
+        `Error enviando notificación WhatsApp post-indexado para doc #${doc.id}: ${err?.message}`,
+      );
     }
   }
 

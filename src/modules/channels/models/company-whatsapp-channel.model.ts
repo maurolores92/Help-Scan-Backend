@@ -168,6 +168,22 @@ export class CompanyWhatsappChannel extends Model {
   declare autoReplyConfirmation: boolean;
 
   @Column({
+    type: DataType.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    field: 'notify_on_receive',
+  })
+  declare notifyOnReceive: boolean;
+
+  @Column({
+    type: DataType.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    field: 'notify_on_indexed',
+  })
+  declare notifyOnIndexed: boolean;
+
+  @Column({
     type: DataType.DATE,
     allowNull: true,
     field: 'last_qr_at',

@@ -61,3 +61,15 @@ export function buildIngestErrorMessage(params: {
     `• Motivo: ${params.reason}`,
   ].join('\n');
 }
+
+export function buildWhatsappReceivedNotification(): string {
+  return '📥 Documento recibido en HelpScan';
+}
+
+export function buildWhatsappDuplicateNotification(): string {
+  return 'ℹ️ Documento ya registrado en HelpScan';
+}
+
+export function buildWhatsappIndexedNotification(): string {
+  return '✅ Documento indexado en HelpScan';
+}

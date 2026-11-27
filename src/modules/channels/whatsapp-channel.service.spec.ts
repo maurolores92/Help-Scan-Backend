@@ -330,4 +330,174 @@ describe('WhatsappChannelService (QR Baileys)', () => {
     expect(createdMessages[1].status).toBe(WhatsappMessageStatus.PROCESSED);
     expect(createdMessages[1].groupJid).toBe('120363999@g.us');
   });
+
+  it('envía notificación breve al recibir y al indexar hacia el usuario o grupo según los switches activos', async () => {
+    const channelRecord: any = {
+      id: 8,
+      companyId: 7,
+      userId: 9,
+      sessionKey: 'company_7_user_9',
+      senderPolicy: WhatsappSenderPolicy.ALL,
+      allowedPhones: [],
+      ignoreGroups: false,
+      groupPolicy: WhatsappGroupPolicy.ALL,
+      allowedGroups: [],
+      isActive: true,
+      processImages: true,
+      notifyOnReceive: true,
+      notifyOnIndexed: true,
+      autoReplyConfirmation: true,
+      lastSyncStatus: WhatsappSyncStatus.IDLE,
+      update: jest.fn().mockImplementation(async (patch) => {
+        Object.assign(channelRecord, patch);
+        return channelRecord;
+      }),
+      toJSON: () => ({ ...channelRecord }),
+    };
+
+    const whatsappChannelModel: any = {
+      findOrCreate: jest.fn().mockResolvedValue([channelRecord, false]),
+      findOne: jest.fn().mockResolvedValue(channelRecord),
+      findByPk: jest.fn().mockResolvedValue(channelRecord),
+    };
+    const whatsappMessageModel: any = {
+      findOne: jest
+        .fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          id: 44,
+          companyId: 7,
+          channelId: 8,
+          userId: 9,
+          documentId: 912,
+          replyJid: '120363999@g.us',
+          groupJid: '120363999@g.us',
+          senderPhone: '5491177776666',
+        }),
+      create: jest.fn().mockImplementation(async (payload) => {
+        const rec: any = {
+          id: 44,
+          ...payload,
+          update: jest.fn().mockImplementation(async (patch) => {
+            Object.assign(rec, patch);
+            return rec;
+          }),
+        };
+        return rec;
+      }),
+    };
+    const companyModel: any = {
+      findByPk: jest.fn().mockResolvedValue({
+        id: 7,
+        status: CompanyStatus.ACTIVE,
+        enabledModules: ['documents', 'whatsapp'],
+      }),
+    };
+    const baileysService: any = {
+      registerIncomingMessagesHandler: jest.fn(),
+      downloadMessageMedia: jest.fn().mockResolvedValue(Buffer.from('%PDF-1.7\nNotifyPDF')),
+      resolveGroupSubject: jest.fn().mockResolvedValue('Comprobantes'),
+      sendTextMessage: jest.fn().mockResolvedValue(undefined),
+      getRuntimeSnapshot: jest.fn().mockReturnValue({
+        channelId: 8,
+        companyId: 7,
+        userId: 9,
+        connectionStatus: WhatsappConnectionStatus.CONNECTED,
+        qrDataUrl: null,
+        connectedPhone: '5491100001111',
+        connectedName: 'HelpScan',
+        lastError: null,
+      }),
+    };
+    const documentsService: any = {
+      ingestPdfFromChannel: jest.fn().mockResolvedValue({
+        document: { id: 912 },
+        isDuplicate: false,
+      }),
+    };
+
+    let registeredPostHook: ((doc: any) => Promise<void>) | null = null;
+    const processingQueue: any = {
+      registerPostProcessHook: jest.fn().mockImplementation((cb) => {
+        registeredPostHook = cb;
+      }),
+    };
+
+    const service = new WhatsappChannelService(
+      whatsappChannelModel,
+      whatsappMessageModel,
+      companyModel,
+      baileysService,
+      documentsService,
+      processingQueue,
+      { log: jest.fn().mockResolvedValue(undefined) } as any,
+      { dispatch: jest.fn().mockResolvedValue(undefined) } as any,
+    );
+
+    service.onModuleInit();
+    expect(registeredPostHook).toBeDefined();
+
+    // 1. Guardar preferencias con switches activos
+    await service.upsertSettings(
+      {
+        notifyOnReceive: true,
+        notifyOnIndexed: true,
+      },
+      { id: 9, companyId: 7, role: 'company_admin' },
+    );
+    expect(channelRecord.notifyOnReceive).toBe(true);
+    expect(channelRecord.notifyOnIndexed).toBe(true);
+
+    // 2. Recibir archivo en grupo -> notifica recepción al grupo
+    await service.handleIncomingBaileysMessages(8, 7, 9, [
+      {
+        key: {
+          id: 'wa.notify_group',
+          fromMe: false,
+          remoteJid: '120363999@g.us',
+          participant: '5491177776666@s.whatsapp.net',
+        },
+        pushName: 'Chofer',
+        message: {
+          documentMessage: { mimetype: 'application/pdf', fileName: 'remito.pdf' },
+        },
+      },
+    ]);
+
+    expect(baileysService.sendTextMessage).toHaveBeenCalledWith(
+      8,
+      '120363999@g.us',
+      '📥 Documento recibido en HelpScan',
+    );
+
+    // 3. Ejecutar post-process hook al indexar -> notifica indexado al mismo grupo
+    await registeredPostHook!({
+      id: 912,
+      companyId: 7,
+      source: DocumentSource.WHATSAPP,
+    });
+
+    expect(baileysService.sendTextMessage).toHaveBeenCalledWith(
+      8,
+      '120363999@g.us',
+      '✅ Documento indexado en HelpScan',
+    );
+
+    // 4. Si se apagan los switches, no envía más mensajes salientes
+    channelRecord.notifyOnIndexed = false;
+    whatsappMessageModel.findOne.mockResolvedValueOnce({
+      id: 44,
+      companyId: 7,
+      channelId: 8,
+      userId: 9,
+      documentId: 912,
+      replyJid: '120363999@g.us',
+    });
+    await registeredPostHook!({
+      id: 912,
+      companyId: 7,
+      source: DocumentSource.WHATSAPP,
+    });
+    expect(baileysService.sendTextMessage).toHaveBeenCalledTimes(2);
+  });
 });

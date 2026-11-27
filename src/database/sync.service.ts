@@ -245,6 +245,8 @@ export class SyncService implements OnModuleInit {
       `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "ignore_groups" BOOLEAN NOT NULL DEFAULT TRUE;`,
       `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "group_policy" VARCHAR(20) NOT NULL DEFAULT 'IGNORE';`,
       `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "allowed_groups" JSONB NOT NULL DEFAULT '[]';`,
+      `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "notify_on_receive" BOOLEAN NOT NULL DEFAULT FALSE;`,
+      `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "notify_on_indexed" BOOLEAN NOT NULL DEFAULT FALSE;`,
       `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "last_qr_at" TIMESTAMP WITH TIME ZONE DEFAULT NULL;`,
       `ALTER TABLE "company_whatsapp_channels" ADD COLUMN IF NOT EXISTS "last_message_at" TIMESTAMP WITH TIME ZONE DEFAULT NULL;`,
       `ALTER TABLE "whatsapp_messages" ADD COLUMN IF NOT EXISTS "reply_jid" VARCHAR(120) DEFAULT NULL;`,
