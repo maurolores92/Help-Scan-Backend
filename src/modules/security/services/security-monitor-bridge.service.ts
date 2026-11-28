@@ -1,4 +1,4 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { col, fn, Op, QueryTypes } from 'sequelize';
 import { Sequelize } from 'sequelize-typescript';
@@ -13,6 +13,10 @@ import {
   normalizeIpAddress,
   sanitizeSecurityDetails,
 } from '../helpers/security-request.helper';
+import {
+  pruneExcessSecurityLogRows,
+  resolveMaxSecurityLogRows,
+} from '../helpers/security-log-retention.helper';
 
 export interface RecordAccessLogParams {
   source: string;
@@ -34,8 +38,9 @@ const DEFAULT_RETENTION_DAYS = 60;
  * `/api/security/ip-summary` y `/api/security/country-summary`).
  */
 @Injectable()
-export class SecurityMonitorBridgeService {
+export class SecurityMonitorBridgeService implements OnModuleInit {
   private readonly logger = new Logger(SecurityMonitorBridgeService.name);
+  private isPruningAccessLogs = false;
 
   constructor(
     @InjectModel(SecurityAccessLog)
@@ -43,6 +48,27 @@ export class SecurityMonitorBridgeService {
     private readonly geoIpService: GeoIpService,
     @Optional() private readonly sequelize?: Sequelize,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    if (process.env.NODE_ENV !== 'test') {
+      await this.enforceAccessLogCap().catch(() => 0);
+    }
+  }
+
+  async enforceAccessLogCap(): Promise<number> {
+    if (this.isPruningAccessLogs) return 0;
+    this.isPruningAccessLogs = true;
+    try {
+      return await pruneExcessSecurityLogRows({
+        model: this.accessLogModel,
+        tableName: 'security_access_logs',
+        maxRows: resolveMaxSecurityLogRows(),
+        sequelize: this.sequelize,
+      });
+    } finally {
+      this.isPruningAccessLogs = false;
+    }
+  }
 
   async recordAccessLog(params: RecordAccessLogParams): Promise<void> {
     try {
@@ -96,6 +122,8 @@ export class SecurityMonitorBridgeService {
           : null,
         details: sanitizeSecurityDetails(params.message, params.stackTrace),
       } as never);
+
+      await this.enforceAccessLogCap();
     } catch (err: any) {
       this.logger.debug(`Error persistiendo access log: ${err?.message}`);
     }
@@ -539,8 +567,12 @@ export class SecurityMonitorBridgeService {
 
   async purgeExpired(retentionDays = DEFAULT_RETENTION_DAYS): Promise<number> {
     const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
-    return this.accessLogModel.destroy({
-      where: { createdAt: { [Op.lt]: cutoff } },
-    });
+    const expiredDeleted = Number(
+      (await this.accessLogModel.destroy({
+        where: { createdAt: { [Op.lt]: cutoff } },
+      })) || 0,
+    );
+    const cappedDeleted = await this.enforceAccessLogCap();
+    return expiredDeleted + cappedDeleted;
   }
 }

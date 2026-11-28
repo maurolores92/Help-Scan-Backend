@@ -352,5 +352,43 @@ describe('HelpCopies Monitor Bridge (/api/security/* + x-monitor-key)', () => {
         }),
       ]);
     });
+
+    it('poda security_access_logs para conservar como máximo los 500 ingresos más nuevos', async () => {
+      const storedRows = Array.from({ length: 504 }, (_, idx) => ({
+        id: 504 - idx,
+        createdAt: new Date(Date.now() - idx * 1000),
+      }));
+
+      const accessLogModelMock: any = {
+        create: jest.fn().mockResolvedValue({ id: 505 }),
+        findAll: jest.fn().mockImplementation(async ({ offset = 0 }: any) => storedRows.slice(offset)),
+        destroy: jest.fn().mockResolvedValue(4),
+      };
+
+      const bridgeService = new SecurityMonitorBridgeService(
+        accessLogModelMock,
+        { getOrLookupIp: jest.fn() } as any,
+        undefined,
+      );
+
+      await bridgeService.recordAccessLog({
+        source: 'FRONTEND',
+        eventType: 'FRONTEND_VISIT',
+        ipAddress: '127.0.0.1',
+        method: 'GET',
+        path: '/api/auth/me',
+        statusCode: 200,
+      });
+
+      expect(accessLogModelMock.create).toHaveBeenCalledTimes(1);
+      expect(accessLogModelMock.findAll).toHaveBeenCalledWith(
+        expect.objectContaining({ offset: 500 }),
+      );
+      const destroyedWhere = accessLogModelMock.destroy.mock.calls[0][0].where.id;
+      const destroyedIds = Object.getOwnPropertySymbols(destroyedWhere).map(
+        (sym) => destroyedWhere[sym],
+      )[0];
+      expect(destroyedIds).toEqual([4, 3, 2, 1]);
+    });
   });
 });

@@ -397,4 +397,79 @@ describe('Security Module (GeoIP, Bloqueo IP, Retención 60d, Errores y RBAC Sup
       );
     });
   });
+
+  describe('Límite máximo de 500 registros en logs de seguridad', () => {
+    it('mantiene máximo 500 errores 4xx/5xx y logins eliminando los registros más viejos', async () => {
+      const errorRows = Array.from({ length: 503 }, (_, idx) => ({
+        id: 503 - idx,
+        createdAt: new Date(Date.now() - idx * 1000),
+      }));
+      const loginRows = Array.from({ length: 502 }, (_, idx) => ({
+        id: 502 - idx,
+        createdAt: new Date(Date.now() - idx * 1000),
+      }));
+
+      const ipModelMock: any = {
+        findAll: jest.fn().mockResolvedValue([]),
+        findOrCreate: jest.fn().mockResolvedValue([{ update: jest.fn() }, true]),
+        destroy: jest.fn().mockResolvedValue(0),
+      };
+      const errorLogModelMock: any = {
+        create: jest.fn().mockResolvedValue({ id: 504, createdAt: new Date() }),
+        findAll: jest.fn().mockImplementation(async ({ offset = 0 }: any) => errorRows.slice(offset)),
+        destroy: jest.fn().mockResolvedValue(3),
+      };
+      const loginEventModelMock: any = {
+        create: jest.fn().mockResolvedValue({ id: 503, createdAt: new Date() }),
+        count: jest.fn().mockResolvedValue(1),
+        findAll: jest.fn().mockImplementation(async ({ offset = 0 }: any) => loginRows.slice(offset)),
+        destroy: jest.fn().mockResolvedValue(2),
+      };
+
+      const service = new SecurityService(
+        ipModelMock,
+        loginEventModelMock,
+        errorLogModelMock,
+        { getOrLookupIp: jest.fn().mockResolvedValue({ countryCode: 'AR', countryName: 'Argentina', isp: 'ISP' }) } as any,
+        { log: jest.fn().mockResolvedValue(undefined) } as any,
+        { dispatch: jest.fn().mockResolvedValue(undefined) } as any,
+      );
+
+      await service.recordErrorLog({
+        source: SecurityErrorSource.BACKEND,
+        statusCode: 500,
+        method: 'GET',
+        path: '/api/documents',
+        message: 'Unexpected error',
+        ipAddress: '127.0.0.1',
+      });
+
+      expect(errorLogModelMock.findAll).toHaveBeenCalledWith(
+        expect.objectContaining({ offset: 500 }),
+      );
+      expect(errorLogModelMock.destroy).toHaveBeenCalledWith({
+        where: { id: expect.objectContaining({}) },
+      });
+      const destroyedErrorWhere = errorLogModelMock.destroy.mock.calls[0][0].where.id;
+      const destroyedErrorIds = Object.getOwnPropertySymbols(destroyedErrorWhere).map(
+        (sym) => destroyedErrorWhere[sym],
+      )[0];
+      expect(destroyedErrorIds).toEqual([3, 2, 1]);
+
+      await service.recordLoginEvent({
+        eventType: SecurityLoginEventType.LOGIN_SUCCESS,
+        usernameAttempted: 'admin',
+        ipAddress: '127.0.0.1',
+      });
+
+      expect(loginEventModelMock.findAll).toHaveBeenCalledWith(
+        expect.objectContaining({ offset: 500 }),
+      );
+      const destroyedLoginWhere = loginEventModelMock.destroy.mock.calls[0][0].where.id;
+      const destroyedLoginIds = Object.getOwnPropertySymbols(destroyedLoginWhere).map(
+        (sym) => destroyedLoginWhere[sym],
+      )[0];
+      expect(destroyedLoginIds).toEqual([2, 1]);
+    });
+  });
 });

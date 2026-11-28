@@ -34,6 +34,10 @@ import {
   parseUserAgentSummary,
   sanitizeSecurityPayload,
 } from '../helpers/security-request.helper';
+import {
+  pruneExcessSecurityLogRows,
+  resolveMaxSecurityLogRows,
+} from '../helpers/security-log-retention.helper';
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../audit/audit.model';
 import { NotificationsService } from '../../notifications/notifications.service';
@@ -63,6 +67,8 @@ export class SecurityService implements OnModuleInit, OnModuleDestroy {
   private readonly bruteForceCooldowns = new Map<string, number>();
   private flushTimer: NodeJS.Timeout | null = null;
   private isFlushingTraffic = false;
+  private isPruningErrorLogs = false;
+  private isPruningLoginEvents = false;
 
   constructor(
     @InjectModel(SecurityIpIntelligence)
@@ -103,6 +109,8 @@ export class SecurityService implements OnModuleInit, OnModuleDestroy {
       await this.reloadBlockedIps().catch((e) => {
         this.logger.warn(`No se pudo precargar lista de IPs bloqueadas: ${e?.message}`);
       });
+      await this.enforceErrorLogCap().catch(() => 0);
+      await this.enforceLoginEventCap().catch(() => 0);
 
       this.flushTimer = setInterval(() => {
         void this.flushTrafficBuffer();
@@ -123,6 +131,38 @@ export class SecurityService implements OnModuleInit, OnModuleDestroy {
   getRetentionDays(): number {
     const raw = Number(process.env.SECURITY_LOG_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
     return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_RETENTION_DAYS;
+  }
+
+  getMaxLogRows(): number {
+    return resolveMaxSecurityLogRows();
+  }
+
+  async enforceErrorLogCap(): Promise<number> {
+    if (this.isPruningErrorLogs) return 0;
+    this.isPruningErrorLogs = true;
+    try {
+      return await pruneExcessSecurityLogRows({
+        model: this.errorLogModel,
+        tableName: 'security_error_logs',
+        maxRows: this.getMaxLogRows(),
+      });
+    } finally {
+      this.isPruningErrorLogs = false;
+    }
+  }
+
+  async enforceLoginEventCap(): Promise<number> {
+    if (this.isPruningLoginEvents) return 0;
+    this.isPruningLoginEvents = true;
+    try {
+      return await pruneExcessSecurityLogRows({
+        model: this.loginEventModel,
+        tableName: 'security_login_events',
+        maxRows: this.getMaxLogRows(),
+      });
+    } finally {
+      this.isPruningLoginEvents = false;
+    }
   }
 
   async purgePrivateIpRecords(): Promise<number> {
@@ -362,6 +402,8 @@ export class SecurityService implements OnModuleInit, OnModuleDestroy {
         usernameAttempted: params.usernameAttempted || null,
         message: params.failureReason || params.eventType,
       });
+
+      await this.enforceLoginEventCap();
     } catch (err: any) {
       this.logger.warn(`Error registrando evento de login: ${err?.message}`);
     }
@@ -542,6 +584,8 @@ export class SecurityService implements OnModuleInit, OnModuleDestroy {
           stackTrace: params.stackTrace || null,
         });
       }
+
+      await this.enforceErrorLogCap();
     } catch (err: any) {
       this.logger.warn(`Error registrando log de error de seguridad: ${err?.message}`);
     }
@@ -870,7 +914,7 @@ export class SecurityService implements OnModuleInit, OnModuleDestroy {
     const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
     const ipCutoff = new Date(Date.now() - Math.max(retentionDays, 90) * 24 * 60 * 60 * 1000);
 
-    const [deletedLogins, deletedErrors, deletedIps, deletedAccessLogs] = await Promise.all([
+    const [deletedLoginsByAge, deletedErrorsByAge, deletedIps, deletedAccessLogs] = await Promise.all([
       this.loginEventModel.destroy({ where: { createdAt: { [Op.lt]: cutoff } } }),
       this.errorLogModel.destroy({ where: { createdAt: { [Op.lt]: cutoff } } }),
       this.ipModel.destroy({
@@ -881,6 +925,13 @@ export class SecurityService implements OnModuleInit, OnModuleDestroy {
       }),
       this.monitorBridge?.purgeExpired(retentionDays) ?? Promise.resolve(0),
     ]);
+
+    const [deletedLoginsByCap, deletedErrorsByCap] = await Promise.all([
+      this.enforceLoginEventCap(),
+      this.enforceErrorLogCap(),
+    ]);
+    const deletedLogins = deletedLoginsByAge + deletedLoginsByCap;
+    const deletedErrors = deletedErrorsByAge + deletedErrorsByCap;
 
     if (deletedLogins > 0 || deletedErrors > 0 || deletedIps > 0 || deletedAccessLogs > 0) {
       this.logger.log(
